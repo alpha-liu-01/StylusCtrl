@@ -1,0 +1,7 @@
+{
+  "match": { "vendor": "0531", "product": "0104" },
+  "mapping": { "mode": "fit", "crop": "center" },
+  "pressure": { "curve": [0.0, 0.0, 0.4, 0.7, 1.0, 1.0], "deadzone": 0.0 },
+  "buttons": { "BTN_STYLUS": { "action": "shortcut", "keys": ["CTRL", "Z"] } },
+  "tools": { "eraserWins": true }
+}

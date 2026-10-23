@@ -1,0 +1,6 @@
+id=stylusctrl
+name=StylusCtrl
+version=v0.3.0
+versionCode=3
+author=StylusCtrl
+description=数位板映射、压感曲线和侧键。不放 IDC，虚拟设备保持指针。
