@@ -25,3 +25,9 @@ tools/build-apk.sh
 ## Installation
 
 The module zip is `out/stylusctrl.zip`. Flash it in Magisk and reboot. The settings app is `out/stylusctrl.apk`. Both can be found in releases.
+
+## License
+
+StylusCtrl is [MIT](LICENSE), copyright alpha-liu-01.
+
+`magisk/stylusctrl/META-INF/com/google/android/update-binary` is Magisk's `module_installer.sh`, copied unchanged and still under GPL-3.0. See [NOTICE](NOTICE).

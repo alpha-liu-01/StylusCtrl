@@ -1,0 +1,13 @@
+StylusCtrl is released under the MIT License. See LICENSE.
+
+One file is not covered by that grant:
+
+magisk/stylusctrl/META-INF/com/google/android/update-binary
+
+This is Magisk's module_installer.sh, copied unchanged from
+https://github.com/topjohnwu/Magisk (GPL-3.0). Magisk's module guide says to
+ship that script under this path. It stays under GPL-3.0. The license text is
+LICENSES/GPL-3.0.txt. updater-script contains only the marker Magisk requires.
+
+The app links AndroidX, Material Components, and libsu. Those libraries stay
+under the Apache License 2.0. They are dependencies, not part of this tree.
