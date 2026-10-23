@@ -26,49 +26,49 @@
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="拉伸铺满" />
+                android:text="@string/preset_stretch" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/preset_center"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="等比居中" />
+                android:text="@string/preset_center" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/preset_left"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="等比靠左" />
+                android:text="@string/preset_left" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/preset_right"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="等比靠右" />
+                android:text="@string/preset_right" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/preset_top"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="等比靠上" />
+                android:text="@string/preset_top" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/preset_bottom"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="等比靠下" />
+                android:text="@string/preset_bottom" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/preset_custom"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="自定义" />
+                android:text="@string/preset_custom" />
         </com.google.android.material.chip.ChipGroup>
     </HorizontalScrollView>
 
@@ -91,28 +91,28 @@
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="板子 0°" />
+                android:text="@string/rot_0" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/rot_90"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="90°" />
+                android:text="@string/rot_90" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/rot_180"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="180°" />
+                android:text="@string/rot_180" />
 
             <com.google.android.material.chip.Chip
                 android:id="@+id/rot_270"
                 style="@style/Widget.Material3.Chip.Filter"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="270°" />
+                android:text="@string/rot_270" />
         </com.google.android.material.chip.ChipGroup>
     </HorizontalScrollView>
 
@@ -127,6 +127,6 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="左是数位板，右是屏幕。板子方向和裁切、矩形可以一起用。屏幕转到另一个方向时，右边的比例会马上跟着变。"
+        android:text="@string/mapping_hint"
         android:textAppearance="?attr/textAppearanceBodyMedium" />
 </LinearLayout>

@@ -19,7 +19,11 @@ public final class KeyChord {
             "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M",
             "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
             "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
-            "SPACE", "ENTER", "TAB", "ESC", "UP", "DOWN", "LEFT", "RIGHT", "BACKSPACE", "DELETE"
+            "SPACE", "ENTER", "TAB", "ESC", "UP", "DOWN", "LEFT", "RIGHT", "BACKSPACE", "DELETE",
+            "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12",
+            "BACK", "HOME", "RECENT", "APP_SWITCH", "MENU", "COPY", "CUT", "PASTE",
+            "VOL_DOWN", "VOL_UP", "MUTE", "BRIGHTNESS_DOWN", "BRIGHTNESS_UP",
+            "PLAY", "PREV", "NEXT", "POWER", "SLEEP", "WAKEUP"
     };
 
     private KeyChord() {}
@@ -67,9 +71,9 @@ public final class KeyChord {
             choices.addView(chip);
         }
         dialog[0] = new MaterialAlertDialogBuilder(context)
-                .setTitle("加一个键")
+                .setTitle(context.getString(R.string.add_key))
                 .setView(scroll)
-                .setNegativeButton("取消", null)
+                .setNegativeButton(context.getString(R.string.cancel), null)
                 .create();
         dialog[0].show();
     }

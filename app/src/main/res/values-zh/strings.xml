@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 中文。其它语言按 values/strings.xml 的名字另建 values-<语言代码>/strings.xml，缺的条目会回到英语。 -->
+<resources>
+    <string name="nav_map">映射</string>
+    <string name="nav_pressure">压感</string>
+    <string name="nav_buttons">按键</string>
+    <string name="nav_test">测试</string>
+    <string name="nav_internal">内屏</string>
+    <string name="nav_device">设备</string>
+    <string name="save">保存</string>
+    <string name="pen_external">外接数位板</string>
+    <string name="pen_internal">内屏笔</string>
+    <string name="pen_external_short">外接</string>
+    <string name="pen_internal_short">内屏</string>
+
+    <string name="buttons_hint">内屏这份要在内屏页打开抓取才会用到。</string>
+    <string name="stylus_title">第一侧键</string>
+    <string name="stylus_hint">按住就是橡皮，松开回到笔尖。快捷键只点一次，按住不会连发。</string>
+    <string name="action_passthrough">原样留下</string>
+    <string name="action_hold_eraser">按住为橡皮</string>
+    <string name="action_shortcut">快捷键</string>
+    <string name="add_key">加一个键</string>
+    <string name="cancel">取消</string>
+    <string name="rubber_title">橡皮位</string>
+    <string name="rubber_hint">这只板子上，尾部橡皮和笔身第二颗侧键是同一个信号。快捷键只点一次，不会按住连发。第二颗侧键松开后再按，悬停里也会再点一次。尾部橡皮要离开感应范围再进来，才会再点一次。</string>
+    <string name="action_eraser">橡皮</string>
+    <string name="action_stylus2">第二侧键</string>
+    <string name="eraser_wins">橡皮按下时藏起笔尖工具</string>
+
+    <string name="pressure_hint">内屏这份要在内屏页打开抓取才会用到。坐标仍然原样，只改压力。</string>
+    <string name="reset">复位</string>
+    <string name="pressure_graph">横轴是手的压力，纵轴是送给系统的压力。最左节点的横位置是低位死区，低于它保持起点的输出。最右节点是高位死区，高于它顶到终点。</string>
+
+    <string name="internal_body">内屏笔不做区域映射。压感和快捷键在那两页里选「内屏笔」，和外接板子各存一份。这里只决定要不要抓取内屏笔。</string>
+    <string name="internal_switch">抓取内屏笔 sec_e-pen</string>
+    <string name="internal_detail">打开之后独占 sec_e-pen，坐标原样送出，只改这一份压感和侧键。笔槽、皮套、悬停距离和原来的 Home 键会原样送回。需要已经刷入这一版模块。</string>
+
+    <string name="preset_stretch">拉伸铺满</string>
+    <string name="preset_center">等比居中</string>
+    <string name="preset_left">等比靠左</string>
+    <string name="preset_right">等比靠右</string>
+    <string name="preset_top">等比靠上</string>
+    <string name="preset_bottom">等比靠下</string>
+    <string name="preset_custom">自定义</string>
+    <string name="rot_0">板子 0°</string>
+    <string name="mapping_hint">左是数位板，右是屏幕。板子方向和裁切、矩形可以一起用。屏幕转到另一个方向时，右边的比例会马上跟着变。</string>
+
+    <string name="device_loading">正在读取…</string>
+    <string name="test_hint">在下面画一笔。这里不跟页面滚动抢触控。</string>
+
+    <string name="reading_config">正在向 root 读取配置…</string>
+    <string name="no_root">没有 root。Magisk 需要允许这个应用。</string>
+    <string name="config_parse_failed">配置解析失败，界面用默认值</string>
+    <string name="daemon_stopped">守护进程没在跑。保存会写配置，刷上模块并重启后才生效。</string>
+    <string name="daemon_pid">守护进程 pid %1$s</string>
+    <string name="screen_size">\n屏幕 %1$d×%2$d</string>
+    <string name="no_active_screen">\n没有读到活动中的屏幕</string>
+    <string name="no_external">没有外接数位板</string>
+    <string name="axes_scaled">轴范围换成 %1$d×%2$d，矩形已按比例换算</string>
+    <string name="tablet_mismatch">这只板子是 %1$s，配置里只抓 %2$s</string>
+    <string name="use_this_tablet">改成这只</string>
+    <string name="match_unsaved">匹配已改成 %1$s，还没保存</string>
+    <string name="chord_max">一组快捷键最多八个</string>
+    <string name="curve_readout">低于 %1$.0f%% 保持起点，高于 %2$.0f%% 顶到终点</string>
+    <string name="unknown_side_key">%1$s侧键里有不认识的键</string>
+    <string name="unknown_rubber_key">%1$s橡皮位里有不认识的键</string>
+    <string name="shortcut_needs_key">%1$s侧键快捷键至少要一个键</string>
+    <string name="rubber_needs_key">%1$s橡皮位快捷键至少要一个键</string>
+    <string name="writing">正在写入…</string>
+    <string name="wrote_notified">已写入，守护进程会重读</string>
+    <string name="wrote_stopped">已写入。守护进程没在跑，装上模块并重启后才会生效</string>
+    <string name="wrote">已写入</string>
+    <string name="write_failed">写入失败</string>
+    <string name="no_input_devices">没有读到输入设备</string>
+    <string name="no_pen">没有看到数位板或内屏笔</string>
+
+    <string name="label_tablet">数位板</string>
+    <string name="label_screen">屏幕</string>
+    <string name="curve_light">轻</string>
+    <string name="curve_heavy">重</string>
+    <string name="curve_output">输出</string>
+    <string name="tool_pen">笔</string>
+    <string name="tool_eraser">橡皮</string>
+    <string name="tool_finger">手指</string>
+    <string name="tool_mouse">鼠标</string>
+    <string name="tool_other">其他</string>
+    <string name="side_up">松开</string>
+    <string name="side_primary">第一侧键</string>
+    <string name="side_secondary">第二侧键</string>
+    <string name="side_both">%1$s + %2$s</string>
+    <string name="sample">压力 %1$.3f    工具 %2$s    侧键 %3$s</string>
+</resources>

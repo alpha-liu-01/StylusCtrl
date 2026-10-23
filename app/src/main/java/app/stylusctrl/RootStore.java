@@ -1,16 +1,33 @@
 package app.stylusctrl;
 
+import android.content.Context;
 import android.util.Base64;
 
 import com.topjohnwu.superuser.Shell;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public final class RootStore {
     public static final String CONFIG_PATH = "/data/adb/stylusctrl/config.json";
 
     private RootStore() {}
+
+    public static final class Pen {
+        public String name = "";
+        public String vendor = "";
+        public String product = "";
+        public boolean external;
+        public boolean internal;
+        public boolean pointer;
+        public boolean direct;
+        public int maxX;
+        public int maxY;
+    }
 
     public static final class Snapshot {
         public boolean root;
@@ -19,10 +36,11 @@ public final class RootStore {
         public String devices;
         public String display;
         public String error;
-        public int tabletMaxX = 15200;
-        public int tabletMaxY = 9500;
+        public int tabletMaxX;
+        public int tabletMaxY;
         public int screenW;
         public int screenH;
+        public final List<Pen> pens = new ArrayList<>();
     }
 
     public static Snapshot read() {
@@ -31,7 +49,7 @@ public final class RootStore {
             Shell.Result id = Shell.cmd("id -u").exec();
             snap.root = id.isSuccess() && !id.getOut().isEmpty() && "0".equals(id.getOut().get(0).trim());
             if (!snap.root) {
-                snap.error = id.getErr().isEmpty() ? "没有 root" : join(id.getErr());
+                snap.error = id.getErr().isEmpty() ? "no_root" : join(id.getErr());
                 return snap;
             }
             Shell.Result cfg = Shell.cmd("base64 " + CONFIG_PATH).exec();
@@ -42,12 +60,29 @@ public final class RootStore {
             }
             Shell.Result pid = Shell.cmd("pidof stylusctld || true").exec();
             snap.daemonPid = pid.getOut().isEmpty() ? "" : pid.getOut().get(0).trim();
-            Shell.Result ev = Shell.cmd("getevent -p").exec();
-            snap.devices = join(ev.getOut());
-            readAxes(snap);
+            Shell.Result ev = Shell.cmd(DEVICE_CMD).exec();
+            applyDeviceDump(snap, join(ev.getOut()));
             Shell.Result display = Shell.cmd("dumpsys display").exec();
             snap.display = join(display.getOut());
             readDisplay(snap);
+        } catch (Exception e) {
+            snap.error = e.getMessage() == null ? e.toString() : e.getMessage();
+        }
+        return snap;
+    }
+
+    /** Names, axes, and ids only. Used while the screen is open to notice plug and unplug. */
+    public static Snapshot readDevices() {
+        Snapshot snap = new Snapshot();
+        try {
+            Shell.Result id = Shell.cmd("id -u").exec();
+            snap.root = id.isSuccess() && !id.getOut().isEmpty() && "0".equals(id.getOut().get(0).trim());
+            if (!snap.root) {
+                snap.error = id.getErr().isEmpty() ? "no_root" : join(id.getErr());
+                return snap;
+            }
+            Shell.Result ev = Shell.cmd(DEVICE_CMD).exec();
+            applyDeviceDump(snap, join(ev.getOut()));
         } catch (Exception e) {
             snap.error = e.getMessage() == null ? e.toString() : e.getMessage();
         }
@@ -71,34 +106,139 @@ public final class RootStore {
                     "if pidof stylusctld >/dev/null 2>&1; then kill -USR1 $(pidof stylusctld); echo notified; else echo stopped; fi"
             ).exec();
             if (!result.isSuccess()) {
-                return result.getErr().isEmpty() ? "写入失败" : join(result.getErr());
+                return result.getErr().isEmpty() ? "failed" : join(result.getErr());
             }
             String last = result.getOut().isEmpty() ? "" : result.getOut().get(result.getOut().size() - 1).trim();
-            if ("notified".equals(last)) return "已写入，守护进程会重读";
-            if ("stopped".equals(last)) return "已写入。守护进程没在跑，装上模块并重启后才会生效";
-            return "已写入";
+            if ("notified".equals(last) || "stopped".equals(last)) return last;
+            return "written";
         } catch (Exception e) {
             return e.getMessage() == null ? e.toString() : e.getMessage();
         }
     }
 
-    private static void readAxes(Snapshot snap) {
-        if (snap.devices == null) return;
-        String name = "";
-        boolean pen = false;
-        for (String line : snap.devices.split("\n")) {
+    private static final String DEVICE_CMD =
+            "getevent -p; echo '##IDS##'; "
+                    + "for ev in /sys/class/input/event*; do "
+                    + "name=$(cat \"$ev/device/name\" 2>/dev/null | tr '\\n' ' '); "
+                    + "vendor=$(cat \"$ev/device/id/vendor\" 2>/dev/null | tr -d '\\n'); "
+                    + "product=$(cat \"$ev/device/id/product\" 2>/dev/null | tr -d '\\n'); "
+                    + "printf '%s\\t%s\\t%s\\n' \"$name\" \"$vendor\" \"$product\"; "
+                    + "done";
+
+    private static void applyDeviceDump(Snapshot snap, String dump) {
+        if (dump == null) return;
+        String events = dump;
+        String ids = "";
+        int mark = dump.indexOf("##IDS##");
+        if (mark >= 0) {
+            events = dump.substring(0, mark);
+            ids = dump.substring(mark + "##IDS##".length());
+        }
+        snap.devices = events.trim();
+        snap.pens.addAll(parseGetevent(snap.devices));
+        attachIds(snap.pens, ids);
+        for (Pen pen : snap.pens) {
+            if (!pen.external) continue;
+            snap.tabletMaxX = pen.maxX;
+            snap.tabletMaxY = pen.maxY;
+            break;
+        }
+    }
+
+    static List<Pen> parseGetevent(String text) {
+        List<Pen> out = new ArrayList<>();
+        if (text == null || text.isEmpty()) return out;
+        Pen cur = null;
+        boolean inProps = false;
+        boolean sawPressure = false;
+        for (String line : text.split("\n")) {
             String trimmed = line.trim();
-            if (trimmed.startsWith("name:")) {
-                name = trimmed.substring(trimmed.indexOf('"') + 1);
-                if (name.endsWith("\"")) name = name.substring(0, name.length() - 1);
-                pen = name.contains("Wacom") && !name.startsWith("StylusCtrl");
-            } else if (pen && trimmed.startsWith("ABS_X")) {
-                int max = axisMax(trimmed);
-                if (max > 0) snap.tabletMaxX = max;
-            } else if (pen && trimmed.startsWith("ABS_Y")) {
-                int max = axisMax(trimmed);
-                if (max > 0) snap.tabletMaxY = max;
+            if (line.startsWith("add device")) {
+                cur = new Pen();
+                out.add(cur);
+                inProps = false;
+                sawPressure = false;
+                continue;
             }
+            if (cur == null) continue;
+            if (trimmed.startsWith("name:")) {
+                int q = trimmed.indexOf('"');
+                String name = q >= 0 ? trimmed.substring(q + 1) : trimmed.substring(5).trim();
+                if (name.endsWith("\"")) name = name.substring(0, name.length() - 1);
+                cur.name = name.trim();
+                inProps = false;
+            } else if (trimmed.startsWith("input props")) {
+                inProps = true;
+            } else if (inProps && trimmed.startsWith("INPUT_PROP_POINTER")) {
+                cur.pointer = true;
+            } else if (inProps && trimmed.startsWith("INPUT_PROP_DIRECT")) {
+                cur.direct = true;
+            } else if (axisCode(trimmed) == 0x00) {
+                int max = axisMax(trimmed);
+                if (max > 0) cur.maxX = max;
+            } else if (axisCode(trimmed) == 0x01) {
+                int max = axisMax(trimmed);
+                if (max > 0) cur.maxY = max;
+            } else if (axisCode(trimmed) == 0x18) {
+                sawPressure = true;
+            } else if (trimmed.endsWith(":") && !trimmed.startsWith("ABS")) {
+                inProps = false;
+            }
+            cur.external = cur.pointer && !cur.direct && sawPressure && cur.maxX > 0 && cur.maxY > 0
+                    && !cur.name.startsWith("StylusCtrl") && !"sec_e-pen".equals(cur.name);
+            cur.internal = "sec_e-pen".equals(cur.name);
+        }
+        return out;
+    }
+
+    private static void attachIds(List<Pen> pens, String table) {
+        List<String[]> rows = new ArrayList<>();
+        for (String line : table.split("\n")) {
+            String trimmed = line.trim();
+            if (trimmed.isEmpty()) continue;
+            String[] parts = trimmed.split("\t");
+            if (parts.length < 3) continue;
+            rows.add(parts);
+        }
+        boolean[] used = new boolean[rows.size()];
+        for (Pen pen : pens) {
+            for (int i = 0; i < rows.size(); i++) {
+                if (used[i]) continue;
+                if (!pen.name.equals(rows.get(i)[0].trim())) continue;
+                used[i] = true;
+                pen.vendor = hex4(rows.get(i)[1]);
+                pen.product = hex4(rows.get(i)[2]);
+                break;
+            }
+        }
+    }
+
+    static String hex4(String raw) {
+        if (raw == null) return "";
+        String s = raw.trim().toLowerCase(Locale.US);
+        if (s.startsWith("0x")) s = s.substring(2);
+        if (s.isEmpty()) return "";
+        try {
+            int value = Integer.parseInt(s, 16);
+            return String.format(Locale.US, "%04x", value);
+        } catch (NumberFormatException e) {
+            return s;
+        }
+    }
+
+    private static final Pattern AXIS_CODE = Pattern.compile("(?:ABS_X\\b|ABS_Y\\b|ABS_PRESSURE\\b|([0-9a-fA-F]{4}))\\s+:\\s+value");
+
+    /** ABS_X/Y/PRESSURE, or the hex codes this tablet's getevent prints (0000, 0001, 0018). */
+    private static int axisCode(String line) {
+        if (line.startsWith("ABS_X")) return 0x00;
+        if (line.startsWith("ABS_Y")) return 0x01;
+        if (line.startsWith("ABS_PRESSURE")) return 0x18;
+        Matcher matcher = AXIS_CODE.matcher(line);
+        if (!matcher.find() || matcher.group(1) == null) return -1;
+        try {
+            return Integer.parseInt(matcher.group(1), 16);
+        } catch (NumberFormatException e) {
+            return -1;
         }
     }
 
@@ -161,27 +301,24 @@ public final class RootStore {
         }
     }
 
-    public static String axesSummary(String getevent) {
-        if (getevent == null || getevent.isEmpty()) return "没有读到输入设备";
+    public static String axesSummary(Context context, List<Pen> pens) {
+        if (pens == null || pens.isEmpty()) return context.getString(R.string.no_input_devices);
         StringBuilder out = new StringBuilder();
-        String name = "";
-        boolean interesting = false;
-        for (String line : getevent.split("\n")) {
-            String trimmed = line.trim();
-            if (trimmed.startsWith("name:")) {
-                name = trimmed.substring(trimmed.indexOf('"') + 1);
-                if (name.endsWith("\"")) name = name.substring(0, name.length() - 1);
-                interesting = name.contains("Wacom") || name.contains("sec_e-pen") || name.startsWith("StylusCtrl");
-                if (interesting) {
-                    if (out.length() > 0) out.append("\n");
-                    out.append(name);
-                }
-            } else if (interesting && (trimmed.startsWith("ABS_X") || trimmed.startsWith("ABS_Y")
-                    || trimmed.startsWith("ABS_PRESSURE"))) {
-                out.append("\n  ").append(trimmed);
+        for (Pen pen : pens) {
+            boolean show = pen.external || pen.internal || pen.name.startsWith("StylusCtrl");
+            if (!show) continue;
+            if (out.length() > 0) out.append("\n");
+            if (pen.external) out.append(context.getString(R.string.pen_external_short)).append(' ');
+            else if (pen.internal) out.append(context.getString(R.string.pen_internal_short)).append(' ');
+            out.append(pen.name);
+            if (!pen.vendor.isEmpty() && !pen.product.isEmpty()) {
+                out.append("  ").append(pen.vendor).append(":").append(pen.product);
+            }
+            if (pen.maxX > 0 && pen.maxY > 0) {
+                out.append("\n  X 0–").append(pen.maxX).append("  Y 0–").append(pen.maxY);
             }
         }
-        return out.length() == 0 ? "没有看到数位板或内屏笔" : out.toString();
+        return out.length() == 0 ? context.getString(R.string.no_pen) : out.toString();
     }
 
     private static String join(List<String> lines) {

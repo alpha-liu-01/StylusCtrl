@@ -11,7 +11,6 @@ import com.google.android.material.color.MaterialColors;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 
 /** A drawing surface that is not inside a scrolling parent, so a stroke is not cancelled. */
 public class TestCanvas extends View {
@@ -103,31 +102,35 @@ public class TestCanvas extends View {
         listener.onSample(describe(event));
     }
 
-    private static String describe(MotionEvent event) {
+    private String describe(MotionEvent event) {
         String tool;
         switch (event.getToolType(0)) {
             case MotionEvent.TOOL_TYPE_STYLUS:
-                tool = "笔";
+                tool = getContext().getString(R.string.tool_pen);
                 break;
             case MotionEvent.TOOL_TYPE_ERASER:
-                tool = "橡皮";
+                tool = getContext().getString(R.string.tool_eraser);
                 break;
             case MotionEvent.TOOL_TYPE_FINGER:
-                tool = "手指";
+                tool = getContext().getString(R.string.tool_finger);
                 break;
             case MotionEvent.TOOL_TYPE_MOUSE:
-                tool = "鼠标";
+                tool = getContext().getString(R.string.tool_mouse);
                 break;
             default:
-                tool = "其他";
+                tool = getContext().getString(R.string.tool_other);
                 break;
         }
         int buttons = event.getButtonState();
-        String side = "松开";
-        if ((buttons & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0) side = "第一侧键";
-        if ((buttons & MotionEvent.BUTTON_STYLUS_SECONDARY) != 0) {
-            side = side.equals("松开") ? "第二侧键" : side + " + 第二侧键";
+        String up = getContext().getString(R.string.side_up);
+        String side = up;
+        if ((buttons & MotionEvent.BUTTON_STYLUS_PRIMARY) != 0) {
+            side = getContext().getString(R.string.side_primary);
         }
-        return String.format(Locale.US, "压力 %.3f    工具 %s    侧键 %s", event.getPressure(), tool, side);
+        if ((buttons & MotionEvent.BUTTON_STYLUS_SECONDARY) != 0) {
+            String second = getContext().getString(R.string.side_secondary);
+            side = side.equals(up) ? second : getContext().getString(R.string.side_both, side, second);
+        }
+        return getContext().getString(R.string.sample, event.getPressure(), tool, side);
     }
 }

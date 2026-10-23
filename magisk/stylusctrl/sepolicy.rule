@@ -1,3 +1,4 @@
 allow magisk input_device dir { getattr open read search }
 allow magisk input_device chr_file { getattr ioctl lock open read write }
 allow magisk uhid_device chr_file { getattr ioctl lock open read write }
+allow magisk hidraw_device chr_file { getattr ioctl open read }

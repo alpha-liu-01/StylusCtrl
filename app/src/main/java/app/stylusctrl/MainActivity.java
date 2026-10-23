@@ -24,7 +24,6 @@ import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.navigationrail.NavigationRailView;
 import com.google.android.material.snackbar.Snackbar;
 
-import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -52,6 +51,13 @@ public class MainActivity extends AppCompatActivity {
     private CurveGraph curve;
     private TextView curveReadout;
     private TextView status;
+    private NavigationRailView rail;
+    private boolean editingInternal;
+    private boolean resumed;
+    private boolean devicesBusy;
+    private String offeredMatch = "";
+    private String deviceLine = "";
+    private String statusPrefix = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -107,15 +113,49 @@ public class MainActivity extends AppCompatActivity {
         });
         pressurePage.findViewById(R.id.curve_reset).setOnClickListener(v -> resetCurve());
         wireButtons();
+        wireDeviceChoice();
         wireInternal();
 
-        NavigationRailView rail = findViewById(R.id.rail);
+        rail = findViewById(R.id.rail);
         rail.setOnItemSelectedListener(this::showPage);
         rail.setSelectedItemId(R.id.nav_map);
         findViewById(R.id.save).setOnClickListener(v -> save());
         showProfile(profile);
         load();
     }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        root.removeCallbacks(watchDevices);
+        root.post(watchDevices);
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        root.removeCallbacks(watchDevices);
+        super.onPause();
+    }
+
+    private final Runnable watchDevices = new Runnable() {
+        @Override
+        public void run() {
+            if (!resumed) return;
+            if (!devicesBusy) {
+                devicesBusy = true;
+                io.execute(() -> {
+                    RootStore.Snapshot snap = RootStore.readDevices();
+                    runOnUiThread(() -> {
+                        devicesBusy = false;
+                        if (resumed && snap.root) applyDevices(snap);
+                    });
+                });
+            }
+            if (resumed) root.postDelayed(this, 1500);
+        }
+    };
 
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
@@ -125,6 +165,8 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        resumed = false;
+        root.removeCallbacks(watchDevices);
         io.shutdownNow();
         super.onDestroy();
     }
@@ -142,7 +184,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void load() {
-        pageSub.setText("正在向 root 读取配置…");
+        pageSub.setText(R.string.reading_config);
         io.execute(() -> {
             RootStore.Snapshot snap = RootStore.read();
             runOnUiThread(() -> applySnapshot(snap));
@@ -151,7 +193,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void applySnapshot(RootStore.Snapshot snap) {
         if (!snap.root) {
-            String message = snap.error == null ? "没有 root。Magisk 需要允许这个应用。" : snap.error;
+            String message = snap.error == null || "no_root".equals(snap.error)
+                    ? getString(R.string.no_root) : snap.error;
             pageSub.setText(message);
             status.setText(message);
             return;
@@ -170,16 +213,92 @@ public class MainActivity extends AppCompatActivity {
             try {
                 profile = Profile.parse(snap.configText);
             } catch (Exception e) {
-                pageSub.setText("配置解析失败，界面用默认值");
+                pageSub.setText(R.string.config_parse_failed);
             }
         }
         showProfile(profile);
         String daemon = snap.daemonPid == null || snap.daemonPid.isEmpty()
-                ? "守护进程没在跑。保存会写配置，刷上模块并重启后才生效。"
-                : "守护进程 pid " + snap.daemonPid;
-        String screen = snap.screenW > 0 ? "\n屏幕 " + snap.screenW + "×" + snap.screenH : "\n没有读到活动中的屏幕";
-        status.setText(daemon + screen + "\n" + RootStore.axesSummary(snap.devices));
-        pageSub.setText(snap.daemonPid == null || snap.daemonPid.isEmpty() ? "守护进程没在跑" : "外接数位板");
+                ? getString(R.string.daemon_stopped)
+                : getString(R.string.daemon_pid, snap.daemonPid);
+        String screen = snap.screenW > 0
+                ? getString(R.string.screen_size, snap.screenW, snap.screenH)
+                : getString(R.string.no_active_screen);
+        statusPrefix = daemon + screen;
+        applyDevices(snap);
+    }
+
+    private void applyDevices(RootStore.Snapshot snap) {
+        RootStore.Pen external = null;
+        for (RootStore.Pen pen : snap.pens) {
+            if (pen.external) {
+                external = pen;
+                break;
+            }
+        }
+        setMappingVisible(external != null);
+        if (external != null) adoptAxes(external);
+        status.setText(statusPrefix + "\n" + RootStore.axesSummary(this, snap.pens));
+        String line = external == null ? getString(R.string.no_external) : external.name + "  " + external.maxX + "×" + external.maxY;
+        if (!line.equals(deviceLine)) {
+            deviceLine = line;
+            pageSub.setText(line);
+        }
+    }
+
+    private void setMappingVisible(boolean show) {
+        if (rail == null) return;
+        MenuItem item = rail.getMenu().findItem(R.id.nav_map);
+        if (item == null) return;
+        if (item.isVisible() != show) item.setVisible(show);
+        if (!show && rail.getSelectedItemId() == R.id.nav_map) rail.setSelectedItemId(R.id.nav_curve);
+    }
+
+    private void adoptAxes(RootStore.Pen pen) {
+        int maxX = pen.maxX;
+        int maxY = pen.maxY;
+        int oldX = profile.hasSpan ? profile.spanX : 15200;
+        int oldY = profile.hasSpan ? profile.spanY : 9500;
+        boolean changed = maxX != oldX || maxY != oldY;
+        if (changed && maxX > 0 && maxY > 0 && profile.hasRect) {
+            profile.rect = Profile.scaleRect(profile.rect, profile.rotation, oldX, oldY, maxX, maxY);
+            Snackbar.make(root, getString(R.string.axes_scaled, maxX, maxY), Snackbar.LENGTH_LONG).show();
+        }
+        if (maxX > 0 && maxY > 0) {
+            profile.hasSpan = true;
+            profile.spanX = maxX;
+            profile.spanY = maxY;
+            tabletMaxX = maxX;
+            tabletMaxY = maxY;
+        }
+        if (changed) {
+            board.setAxes(tabletMaxX, tabletMaxY, screenW, screenH);
+            board.setMapping(profile.mode, profile.crop, profile.hasRect, profile.rect,
+                    profile.hasScreen, toFloat(profile.screen));
+        }
+        offerMatch(pen);
+    }
+
+    private void offerMatch(RootStore.Pen pen) {
+        if (pen.vendor.isEmpty() || pen.product.isEmpty()) return;
+        String id = pen.vendor + ":" + pen.product;
+        String current = RootStore.hex4(profile.vendor) + ":" + RootStore.hex4(profile.product);
+        if (id.equals(current)) {
+            offeredMatch = "";
+            return;
+        }
+        if (id.equals(offeredMatch)) return;
+        offeredMatch = id;
+        final String vendor = pen.vendor;
+        final String product = pen.product;
+        Snackbar.make(root, getString(R.string.tablet_mismatch, id, current), Snackbar.LENGTH_LONG)
+                .setAction(R.string.use_this_tablet, v -> {
+                    profile.vendor = vendor;
+                    profile.product = product;
+                    offeredMatch = "";
+                    pageSub.setText(getString(R.string.match_unsaved, id));
+                    deviceLine = pageSub.getText().toString();
+                })
+                .show();
     }
 
     private void showProfile(Profile p) {
@@ -189,21 +308,65 @@ public class MainActivity extends AppCompatActivity {
         board.setMapping(p.mode, p.crop, p.hasRect, p.rect, p.hasScreen, toFloat(p.screen));
         checkPreset(p);
         checkRotation(p);
-        curve.setPoints(absoluteCurve(p));
-        showCurveReadout(curve.getPoints());
-        MaterialButtonToggleGroup stylus = buttonsPage.findViewById(R.id.stylus_action);
-        stylus.check("shortcut".equals(p.stylusAction) ? R.id.stylus_shortcut : R.id.stylus_pass);
-        MaterialButtonToggleGroup rubber = buttonsPage.findViewById(R.id.rubber_action);
-        int rubberId = R.id.rubber_eraser;
-        if ("shortcut".equals(p.rubberAction)) rubberId = R.id.rubber_shortcut;
-        else if ("stylus2".equals(p.rubberAction)) rubberId = R.id.rubber_stylus2;
-        rubber.check(rubberId);
-        MaterialSwitch eraser = buttonsPage.findViewById(R.id.eraser_wins);
-        eraser.setChecked(p.eraserWins);
+        syncDeviceToggle();
+        showFeel(feel());
         MaterialSwitch internal = internalPage.findViewById(R.id.internal_pen);
         internal.setChecked(p.internalOn);
+        filling = false;
+    }
+
+    private Profile.Feel feel() {
+        return editingInternal ? profile.internal : profile.external;
+    }
+
+    private void showFeel(Profile.Feel f) {
+        curve.setPoints(absoluteCurve(f));
+        showCurveReadout(curve.getPoints());
+        MaterialButtonToggleGroup stylus = buttonsPage.findViewById(R.id.stylus_action);
+        int stylusId = R.id.stylus_pass;
+        if ("shortcut".equals(f.stylusAction)) stylusId = R.id.stylus_shortcut;
+        else if ("eraser".equals(f.stylusAction)) stylusId = R.id.stylus_eraser;
+        stylus.check(stylusId);
+        MaterialButtonToggleGroup rubber = buttonsPage.findViewById(R.id.rubber_action);
+        int rubberId = R.id.rubber_eraser;
+        if ("shortcut".equals(f.rubberAction)) rubberId = R.id.rubber_shortcut;
+        else if ("stylus2".equals(f.rubberAction)) rubberId = R.id.rubber_stylus2;
+        rubber.check(rubberId);
+        MaterialSwitch eraser = buttonsPage.findViewById(R.id.eraser_wins);
+        eraser.setChecked(f.eraserWins);
         refreshChords();
         showChordRows();
+    }
+
+    private void syncDeviceToggle() {
+        MaterialButtonToggleGroup pressure = pressurePage.findViewById(R.id.pressure_device);
+        MaterialButtonToggleGroup buttons = buttonsPage.findViewById(R.id.buttons_device);
+        pressure.check(editingInternal ? R.id.pressure_internal : R.id.pressure_external);
+        buttons.check(editingInternal ? R.id.buttons_internal : R.id.buttons_external);
+        int hint = editingInternal ? View.VISIBLE : View.GONE;
+        pressurePage.findViewById(R.id.pressure_hint).setVisibility(hint);
+        buttonsPage.findViewById(R.id.buttons_hint).setVisibility(hint);
+    }
+
+    private void wireDeviceChoice() {
+        MaterialButtonToggleGroup pressure = pressurePage.findViewById(R.id.pressure_device);
+        MaterialButtonToggleGroup buttons = buttonsPage.findViewById(R.id.buttons_device);
+        pressure.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+            if (filling || !isChecked) return;
+            chooseDevice(checkedId == R.id.pressure_internal);
+        });
+        buttons.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+            if (filling || !isChecked) return;
+            chooseDevice(checkedId == R.id.buttons_internal);
+        });
+    }
+
+    private void chooseDevice(boolean internal) {
+        if (editingInternal == internal) return;
+        editingInternal = internal;
+        filling = true;
+        syncDeviceToggle();
+        showFeel(feel());
         filling = false;
     }
 
@@ -286,10 +449,11 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void resetCurve() {
-        profile.deadzone = 0;
-        profile.ceiling = 1;
-        profile.curve = new double[] {0, 0, 0.4, 0.7, 0.4, 0.7, 1, 1};
-        float[] xy = absoluteCurve(profile);
+        Profile.Feel f = feel();
+        f.deadzone = 0;
+        f.ceiling = 1;
+        f.curve = new double[] {0, 0, 0.4, 0.7, 0.4, 0.7, 1, 1};
+        float[] xy = absoluteCurve(f);
         filling = true;
         curve.setPoints(xy);
         filling = false;
@@ -313,24 +477,26 @@ public class MainActivity extends AppCompatActivity {
         MaterialButtonToggleGroup rubber = buttonsPage.findViewById(R.id.rubber_action);
         stylus.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
             if (filling || !isChecked) return;
-            profile.stylusAction = checkedId == R.id.stylus_shortcut ? "shortcut" : "passthrough";
+            if (checkedId == R.id.stylus_shortcut) feel().stylusAction = "shortcut";
+            else if (checkedId == R.id.stylus_eraser) feel().stylusAction = "eraser";
+            else feel().stylusAction = "passthrough";
             showChordRows();
         });
         rubber.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
             if (filling || !isChecked) return;
-            if (checkedId == R.id.rubber_shortcut) profile.rubberAction = "shortcut";
-            else if (checkedId == R.id.rubber_stylus2) profile.rubberAction = "stylus2";
-            else profile.rubberAction = "eraser";
+            if (checkedId == R.id.rubber_shortcut) feel().rubberAction = "shortcut";
+            else if (checkedId == R.id.rubber_stylus2) feel().rubberAction = "stylus2";
+            else feel().rubberAction = "eraser";
             showChordRows();
         });
         MaterialSwitch eraser = buttonsPage.findViewById(R.id.eraser_wins);
         eraser.setOnCheckedChangeListener((button, checked) -> {
-            if (!filling) profile.eraserWins = checked;
+            if (!filling) feel().eraserWins = checked;
         });
         MaterialButton stylusAdd = buttonsPage.findViewById(R.id.stylus_add);
         MaterialButton rubberAdd = buttonsPage.findViewById(R.id.rubber_add);
-        stylusAdd.setOnClickListener(v -> addKey(profile.stylusKeys));
-        rubberAdd.setOnClickListener(v -> addKey(profile.rubberKeys));
+        stylusAdd.setOnClickListener(v -> addKey(feel().stylusKeys));
+        rubberAdd.setOnClickListener(v -> addKey(feel().rubberKeys));
     }
 
     private void wireInternal() {
@@ -342,7 +508,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void addKey(java.util.List<String> keys) {
         if (keys.size() >= KeyChord.MAX) {
-            Snackbar.make(root, "一组快捷键最多八个", Snackbar.LENGTH_SHORT).show();
+            Snackbar.make(root, R.string.chord_max, Snackbar.LENGTH_SHORT).show();
             return;
         }
         KeyChord.pick(this, keys, this::refreshChords);
@@ -351,36 +517,36 @@ public class MainActivity extends AppCompatActivity {
     private void refreshChords() {
         ChipGroup stylus = buttonsPage.findViewById(R.id.stylus_chord);
         ChipGroup rubber = buttonsPage.findViewById(R.id.rubber_chord);
-        KeyChord.render(stylus, profile.stylusKeys, () -> {});
-        KeyChord.render(rubber, profile.rubberKeys, () -> {});
+        KeyChord.render(stylus, feel().stylusKeys, () -> {});
+        KeyChord.render(rubber, feel().rubberKeys, () -> {});
     }
 
     private void showChordRows() {
         buttonsPage.findViewById(R.id.stylus_chord_row)
-                .setVisibility("shortcut".equals(profile.stylusAction) ? View.VISIBLE : View.GONE);
+                .setVisibility("shortcut".equals(feel().stylusAction) ? View.VISIBLE : View.GONE);
         buttonsPage.findViewById(R.id.rubber_chord_row)
-                .setVisibility("shortcut".equals(profile.rubberAction) ? View.VISIBLE : View.GONE);
+                .setVisibility("shortcut".equals(feel().rubberAction) ? View.VISIBLE : View.GONE);
     }
 
     private void storeCurve(float[] xy) {
         float lo = xy[0];
         float hi = xy[6];
         if (hi - lo < 0.02f) hi = Math.min(1f, lo + 0.02f);
-        profile.deadzone = lo;
-        profile.ceiling = hi;
+        Profile.Feel f = feel();
+        f.deadzone = lo;
+        f.ceiling = hi;
         double span = hi - lo;
         for (int i = 0; i < 4; i++) {
-            profile.curve[i * 2] = (xy[i * 2] - lo) / span;
-            profile.curve[i * 2 + 1] = xy[i * 2 + 1];
+            f.curve[i * 2] = (xy[i * 2] - lo) / span;
+            f.curve[i * 2 + 1] = xy[i * 2 + 1];
         }
     }
 
     private void showCurveReadout(float[] xy) {
-        curveReadout.setText(String.format(Locale.US,
-                "低于 %.0f%% 保持起点，高于 %.0f%% 顶到终点", xy[0] * 100f, xy[6] * 100f));
+        curveReadout.setText(getString(R.string.curve_readout, xy[0] * 100f, xy[6] * 100f));
     }
 
-    private float[] absoluteCurve(Profile p) {
+    private float[] absoluteCurve(Profile.Feel p) {
         double lo = p.deadzone;
         double hi = p.ceiling;
         if (!(hi > lo)) hi = 1;
@@ -399,36 +565,51 @@ public class MainActivity extends AppCompatActivity {
         return out;
     }
 
+    private boolean keysOk(Profile.Feel feel, String which) {
+        for (String key : feel.stylusKeys) {
+            if (!KeyChord.known(key)) {
+                Snackbar.make(root, getString(R.string.unknown_side_key, which), Snackbar.LENGTH_LONG).show();
+                return false;
+            }
+        }
+        for (String key : feel.rubberKeys) {
+            if (!KeyChord.known(key)) {
+                Snackbar.make(root, getString(R.string.unknown_rubber_key, which), Snackbar.LENGTH_LONG).show();
+                return false;
+            }
+        }
+        if ("shortcut".equals(feel.stylusAction) && feel.stylusKeys.isEmpty()) {
+            Snackbar.make(root, getString(R.string.shortcut_needs_key, which), Snackbar.LENGTH_LONG).show();
+            return false;
+        }
+        if ("shortcut".equals(feel.rubberAction) && feel.rubberKeys.isEmpty()) {
+            Snackbar.make(root, getString(R.string.rubber_needs_key, which), Snackbar.LENGTH_LONG).show();
+            return false;
+        }
+        return true;
+    }
+
     private void save() {
-        for (String key : profile.stylusKeys) {
-            if (!KeyChord.known(key)) {
-                Snackbar.make(root, "侧键里有不认识的键", Snackbar.LENGTH_LONG).show();
-                return;
-            }
-        }
-        for (String key : profile.rubberKeys) {
-            if (!KeyChord.known(key)) {
-                Snackbar.make(root, "橡皮位里有不认识的键", Snackbar.LENGTH_LONG).show();
-                return;
-            }
-        }
-        if ("shortcut".equals(profile.stylusAction) && profile.stylusKeys.isEmpty()) {
-            Snackbar.make(root, "侧键快捷键至少要一个键", Snackbar.LENGTH_LONG).show();
-            return;
-        }
-        if ("shortcut".equals(profile.rubberAction) && profile.rubberKeys.isEmpty()) {
-            Snackbar.make(root, "橡皮位快捷键至少要一个键", Snackbar.LENGTH_LONG).show();
-            return;
-        }
+        if (!keysOk(profile.external, getString(R.string.pen_external))
+                || !keysOk(profile.internal, getString(R.string.pen_internal))) return;
         String json = profile.toJson();
-        pageSub.setText("正在写入…");
+        pageSub.setText(R.string.writing);
         io.execute(() -> {
-            String message = RootStore.write(json);
+            String code = RootStore.write(json);
             runOnUiThread(() -> {
+                String message = writeMessage(code);
                 pageSub.setText(message);
                 Snackbar.make(root, message, Snackbar.LENGTH_LONG).show();
                 status.setText(message + "\n\n" + status.getText());
             });
         });
+    }
+
+    private String writeMessage(String code) {
+        if ("notified".equals(code)) return getString(R.string.wrote_notified);
+        if ("stopped".equals(code)) return getString(R.string.wrote_stopped);
+        if ("written".equals(code)) return getString(R.string.wrote);
+        if ("failed".equals(code)) return getString(R.string.write_failed);
+        return code;
     }
 }

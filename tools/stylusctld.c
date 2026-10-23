@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/hidraw.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
 #include <poll.h>
@@ -22,6 +23,17 @@
 #ifndef BTN_STYLUS2
 #define BTN_STYLUS2 0x14c
 #endif
+#ifndef KEY_HOMEPAGE
+#define KEY_HOMEPAGE 172
+#endif
+#ifndef SW_PEN_INSERTED
+#define SW_PEN_INSERTED 0x0f
+#endif
+#ifndef SW_MACHINE_COVER
+#define SW_MACHINE_COVER 0x10
+#endif
+/* sec_e-pen reports this key. The header on the build machine has no name for it. */
+#define KEY_SEC_EPEN_EXTRA 0x00fd
 
 #define MAX_PENS 4
 #define MAX_PACKET 128
@@ -37,9 +49,16 @@ struct tool_state {
     int phys_rubber;
     int phys_touch;
     int phys_stylus;
+    /* 5.10 hid-input latches BTN_TOOL_RUBBER until the pen leaves range.
+       The Invert usage in the raw report still follows the second button. */
+    int invert_known;
+    int invert_down;
     int sent_pen;
+    int sent_rubber;
     int sent_stylus2;
     unsigned axes;
+    /* Internal digitizer: also forward distance, the dock switches, and its extra keys. */
+    int relay;
 };
 
 enum {
@@ -58,7 +77,8 @@ enum {
 
 enum {
     STYLUS_PASS = 0,
-    STYLUS_SHORTCUT = 1
+    STYLUS_SHORTCUT = 1,
+    STYLUS_ERASER = 2
 };
 
 enum {
@@ -92,6 +112,20 @@ struct profile {
     int rubber_keys[8];
     int rubber_nkeys;
     int internal_on;
+    /* Set when internal.pressure or internal.buttons is present. Otherwise the
+       internal pen uses the external curve and shortcuts. */
+    int in_ready;
+    double in_curve[8];
+    int in_curve_n;
+    double in_deadzone;
+    double in_ceiling;
+    int in_stylus_action;
+    int in_rubber_action;
+    int in_eraser_wins;
+    int in_stylus_keys[8];
+    int in_stylus_nkeys;
+    int in_rubber_keys[8];
+    int in_rubber_nkeys;
     int disp_w;
     int disp_h;
     int orientation;
@@ -117,11 +151,17 @@ static unsigned axis_bit(int code) {
 
 static int keep_event(const struct tool_state *st, const struct input_event *ev) {
     if (ev->type == EV_ABS) {
+        if (st->relay && ev->code == ABS_DISTANCE) return 1;
         unsigned bit = axis_bit(ev->code);
         return bit && (st->axes & bit);
     }
     if (ev->type == EV_KEY) {
-        return ev->code == BTN_TOOL_RUBBER || ev->code == BTN_TOUCH || ev->code == BTN_STYLUS;
+        if (ev->code == BTN_TOOL_RUBBER || ev->code == BTN_TOUCH || ev->code == BTN_STYLUS) return 1;
+        if (st->relay && (ev->code == KEY_HOMEPAGE || ev->code == KEY_SEC_EPEN_EXTRA)) return 1;
+        return 0;
+    }
+    if (st->relay && ev->type == EV_SW) {
+        return ev->code == SW_PEN_INSERTED || ev->code == SW_MACHINE_COVER;
     }
     return ev->type == EV_SYN && ev->code == SYN_REPORT;
 }
@@ -144,9 +184,13 @@ static int emit_report(struct tool_state *st, const struct input_event *in, int 
     int rubber_act = profile ? profile->rubber_action : RUBBER_ERASER;
     int stylus_act = profile ? profile->stylus_action : STYLUS_PASS;
     int eraser_wins = profile ? profile->eraser_wins : 1;
-    int hide_pen = rubber_act == RUBBER_ERASER && eraser_wins && rubber;
+    int stylus_eraser = stylus_act == STYLUS_ERASER && stylus;
+    int hide_pen = stylus_eraser || (rubber_act == RUBBER_ERASER && eraser_wins && rubber);
     int want_pen = hide_pen ? 0 : pen;
-    int want_s2 = rubber_act == RUBBER_STYLUS2 ? rubber : 0;
+    int want_rubber = stylus_eraser || (rubber_act == RUBBER_ERASER && rubber);
+    int rubber_btn = rubber;
+    if (st->invert_known && rubber_act == RUBBER_STYLUS2) rubber_btn = st->invert_down;
+    int want_s2 = rubber_act == RUBBER_STYLUS2 ? rubber_btn : 0;
     int count = 0;
     for (int i = 0; i < n; i++) {
         if (in[i].type == EV_SYN && in[i].code == SYN_REPORT) {
@@ -156,6 +200,14 @@ static int emit_report(struct tool_state *st, const struct input_event *in, int 
                 out[count].type = EV_KEY;
                 out[count].code = BTN_TOOL_PEN;
                 out[count].value = want_pen;
+                count++;
+            }
+            if (st->sent_rubber != want_rubber) {
+                if (count >= out_cap) return -1;
+                out[count] = in[i];
+                out[count].type = EV_KEY;
+                out[count].code = BTN_TOOL_RUBBER;
+                out[count].value = want_rubber;
                 count++;
             }
             if (st->sent_stylus2 != want_s2) {
@@ -171,8 +223,8 @@ static int emit_report(struct tool_state *st, const struct input_event *in, int 
             continue;
         }
         if (in[i].type == EV_KEY && in[i].code == BTN_TOOL_PEN) continue;
-        if (in[i].type == EV_KEY && in[i].code == BTN_TOOL_RUBBER && rubber_act != RUBBER_ERASER) continue;
-        if (in[i].type == EV_KEY && in[i].code == BTN_STYLUS && stylus_act == STYLUS_SHORTCUT) continue;
+        if (in[i].type == EV_KEY && in[i].code == BTN_TOOL_RUBBER) continue;
+        if (in[i].type == EV_KEY && in[i].code == BTN_STYLUS && stylus_act != STYLUS_PASS) continue;
         if (!keep_event(st, &in[i])) continue;
         if (count >= out_cap) return -1;
         out[count++] = in[i];
@@ -182,6 +234,7 @@ static int emit_report(struct tool_state *st, const struct input_event *in, int 
     st->phys_touch = touch;
     st->phys_stylus = stylus;
     st->sent_pen = want_pen;
+    st->sent_rubber = want_rubber;
     st->sent_stylus2 = want_s2;
     return count;
 }
@@ -196,6 +249,9 @@ static void profile_reset(struct profile *p) {
     p->rubber_action = RUBBER_ERASER;
     p->eraser_wins = 1;
     p->ceiling = 1;
+    p->in_rubber_action = RUBBER_ERASER;
+    p->in_eraser_wins = 1;
+    p->in_ceiling = 1;
     p->disp_w = disp_w;
     p->disp_h = disp_h;
     p->orientation = orientation;
@@ -302,6 +358,104 @@ static int key_code(const char *name, int *code) {
         *code = KEY_DELETE;
         return 0;
     }
+    /* F1–F10 are consecutive. F11 and F12 are not. */
+    if (buf[0] == 'F' && n >= 2 && n <= 3) {
+        int num = 0;
+        int ok = 1;
+        for (int i = 1; i < n; i++) {
+            if (buf[i] < '0' || buf[i] > '9') ok = 0;
+            else num = num * 10 + (buf[i] - '0');
+        }
+        if (ok && num >= 1 && num <= 10) {
+            *code = KEY_F1 + (num - 1);
+            return 0;
+        }
+        if (ok && num == 11) {
+            *code = KEY_F11;
+            return 0;
+        }
+        if (ok && num == 12) {
+            *code = KEY_F12;
+            return 0;
+        }
+    }
+    /* Names Generic.kl on this tablet already turns into system actions. */
+    if (!strcmp(buf, "BACK")) {
+        *code = KEY_BACK;
+        return 0;
+    }
+    if (!strcmp(buf, "HOME")) {
+        *code = KEY_HOMEPAGE;
+        return 0;
+    }
+    if (!strcmp(buf, "RECENT")) {
+        *code = KEY_SCALE;
+        return 0;
+    }
+    if (!strcmp(buf, "APP_SWITCH")) {
+        *code = KEY_APPSELECT;
+        return 0;
+    }
+    if (!strcmp(buf, "MENU")) {
+        *code = KEY_MENU;
+        return 0;
+    }
+    if (!strcmp(buf, "COPY")) {
+        *code = KEY_COPY;
+        return 0;
+    }
+    if (!strcmp(buf, "CUT")) {
+        *code = KEY_CUT;
+        return 0;
+    }
+    if (!strcmp(buf, "PASTE")) {
+        *code = KEY_PASTE;
+        return 0;
+    }
+    if (!strcmp(buf, "MUTE")) {
+        *code = KEY_MUTE;
+        return 0;
+    }
+    if (!strcmp(buf, "VOL_DOWN") || !strcmp(buf, "VOLUME_DOWN")) {
+        *code = KEY_VOLUMEDOWN;
+        return 0;
+    }
+    if (!strcmp(buf, "VOL_UP") || !strcmp(buf, "VOLUME_UP")) {
+        *code = KEY_VOLUMEUP;
+        return 0;
+    }
+    if (!strcmp(buf, "POWER")) {
+        *code = KEY_POWER;
+        return 0;
+    }
+    if (!strcmp(buf, "SLEEP")) {
+        *code = KEY_SLEEP;
+        return 0;
+    }
+    if (!strcmp(buf, "WAKEUP") || !strcmp(buf, "WAKE")) {
+        *code = KEY_WAKEUP;
+        return 0;
+    }
+    if (!strcmp(buf, "PLAY")) {
+        *code = KEY_PLAYPAUSE;
+        return 0;
+    }
+    if (!strcmp(buf, "PREV")) {
+        *code = KEY_PREVIOUSSONG;
+        return 0;
+    }
+    if (!strcmp(buf, "NEXT")) {
+        *code = KEY_NEXTSONG;
+        return 0;
+    }
+    if (!strcmp(buf, "BRIGHTNESS_DOWN")) {
+        *code = KEY_BRIGHTNESSDOWN;
+        return 0;
+    }
+    if (!strcmp(buf, "BRIGHTNESS_UP")) {
+        *code = KEY_BRIGHTNESSUP;
+        return 0;
+    }
     return -1;
 }
 
@@ -388,7 +542,36 @@ static int skip_value(const char **pp, int depth) {
     return 0;
 }
 
+/* internal.pressure.* and internal.buttons.* are a second feel. The local
+   path is what the external keys use, so one parser covers both. */
+static int feel_path(const char *path, const char **local) {
+    if (!strncmp(path, "internal.", 9)) {
+        *local = path + 9;
+        return 1;
+    }
+    *local = path;
+    return 0;
+}
+
+static void view_for_pen(const struct profile *src, int direct, struct profile *dst) {
+    *dst = *src;
+    if (!direct || !src->in_ready) return;
+    memcpy(dst->curve, src->in_curve, sizeof dst->curve);
+    dst->curve_n = src->in_curve_n;
+    dst->deadzone = src->in_deadzone;
+    dst->ceiling = src->in_ceiling;
+    dst->stylus_action = src->in_stylus_action;
+    dst->rubber_action = src->in_rubber_action;
+    dst->eraser_wins = src->in_eraser_wins;
+    memcpy(dst->stylus_keys, src->in_stylus_keys, sizeof dst->stylus_keys);
+    dst->stylus_nkeys = src->in_stylus_nkeys;
+    memcpy(dst->rubber_keys, src->in_rubber_keys, sizeof dst->rubber_keys);
+    dst->rubber_nkeys = src->in_rubber_nkeys;
+}
+
 static int apply_string(const char *path, const char *s, struct profile *prof) {
+    const char *local;
+    int inn = feel_path(path, &local);
     if (!strcmp(path, "mapping.mode")) {
         if (!strcmp(s, "passthrough")) prof->mode = MODE_PASS;
         else if (!strcmp(s, "stretch")) prof->mode = MODE_STRETCH;
@@ -417,39 +600,59 @@ static int apply_string(const char *path, const char *s, struct profile *prof) {
         prof->has_match = prof->saw_vendor && prof->saw_product;
         return 0;
     }
-    if (!strcmp(path, "buttons.BTN_STYLUS.action")) {
-        if (!strcmp(s, "passthrough")) prof->stylus_action = STYLUS_PASS;
-        else if (!strcmp(s, "shortcut")) prof->stylus_action = STYLUS_SHORTCUT;
+    if (!strcmp(local, "buttons.BTN_STYLUS.action")) {
+        int act;
+        if (!strcmp(s, "passthrough")) act = STYLUS_PASS;
+        else if (!strcmp(s, "shortcut")) act = STYLUS_SHORTCUT;
+        else if (!strcmp(s, "eraser")) act = STYLUS_ERASER;
         else return -1;
+        if (inn) {
+            prof->in_ready = 1;
+            prof->in_stylus_action = act;
+        } else prof->stylus_action = act;
         return 0;
     }
-    if (!strcmp(path, "buttons.BTN_TOOL_RUBBER.action")) {
-        if (!strcmp(s, "eraser")) prof->rubber_action = RUBBER_ERASER;
-        else if (!strcmp(s, "shortcut")) prof->rubber_action = RUBBER_SHORTCUT;
-        else if (!strcmp(s, "stylus2") || !strcmp(s, "BTN_STYLUS2")) prof->rubber_action = RUBBER_STYLUS2;
+    if (!strcmp(local, "buttons.BTN_TOOL_RUBBER.action")) {
+        int act;
+        if (!strcmp(s, "eraser")) act = RUBBER_ERASER;
+        else if (!strcmp(s, "shortcut")) act = RUBBER_SHORTCUT;
+        else if (!strcmp(s, "stylus2") || !strcmp(s, "BTN_STYLUS2")) act = RUBBER_STYLUS2;
         else return -1;
+        if (inn) {
+            prof->in_ready = 1;
+            prof->in_rubber_action = act;
+        } else prof->rubber_action = act;
         return 0;
     }
     return 0;
 }
 
+static void store_curve(double *curve, int *curve_n, const double *nums, int n) {
+    if (n == 8) {
+        for (int i = 0; i < 8; i++) curve[i] = nums[i];
+    } else {
+        curve[0] = nums[0];
+        curve[1] = nums[1];
+        curve[2] = nums[2];
+        curve[3] = nums[3];
+        curve[4] = nums[2];
+        curve[5] = nums[3];
+        curve[6] = nums[4];
+        curve[7] = nums[5];
+    }
+    *curve_n = 8;
+}
+
 static int assign_array(const char *path, const double *nums, int n, const int *codes, int ncodes,
                         struct profile *prof) {
-    if (!strcmp(path, "pressure.curve")) {
+    const char *local;
+    int inn = feel_path(path, &local);
+    if (!strcmp(local, "pressure.curve")) {
         if (n != 6 && n != 8) return -1;
-        if (n == 8) {
-            for (int i = 0; i < 8; i++) prof->curve[i] = nums[i];
-        } else {
-            prof->curve[0] = nums[0];
-            prof->curve[1] = nums[1];
-            prof->curve[2] = nums[2];
-            prof->curve[3] = nums[3];
-            prof->curve[4] = nums[2];
-            prof->curve[5] = nums[3];
-            prof->curve[6] = nums[4];
-            prof->curve[7] = nums[5];
-        }
-        prof->curve_n = 8;
+        if (inn) {
+            prof->in_ready = 1;
+            store_curve(prof->in_curve, &prof->in_curve_n, nums, n);
+        } else store_curve(prof->curve, &prof->curve_n, nums, n);
         return 0;
     }
     if (!strcmp(path, "mapping.rect")) {
@@ -468,16 +671,28 @@ static int assign_array(const char *path, const double *nums, int n, const int *
         prof->has_screen = 1;
         return 0;
     }
-    if (!strcmp(path, "buttons.BTN_STYLUS.keys")) {
+    if (!strcmp(local, "buttons.BTN_STYLUS.keys")) {
         if (ncodes > 8) return -1;
-        for (int i = 0; i < ncodes; i++) prof->stylus_keys[i] = codes[i];
-        prof->stylus_nkeys = ncodes;
+        if (inn) {
+            prof->in_ready = 1;
+            for (int i = 0; i < ncodes; i++) prof->in_stylus_keys[i] = codes[i];
+            prof->in_stylus_nkeys = ncodes;
+        } else {
+            for (int i = 0; i < ncodes; i++) prof->stylus_keys[i] = codes[i];
+            prof->stylus_nkeys = ncodes;
+        }
         return 0;
     }
-    if (!strcmp(path, "buttons.BTN_TOOL_RUBBER.keys")) {
+    if (!strcmp(local, "buttons.BTN_TOOL_RUBBER.keys")) {
         if (ncodes > 8) return -1;
-        for (int i = 0; i < ncodes; i++) prof->rubber_keys[i] = codes[i];
-        prof->rubber_nkeys = ncodes;
+        if (inn) {
+            prof->in_ready = 1;
+            for (int i = 0; i < ncodes; i++) prof->in_rubber_keys[i] = codes[i];
+            prof->in_rubber_nkeys = ncodes;
+        } else {
+            for (int i = 0; i < ncodes; i++) prof->rubber_keys[i] = codes[i];
+            prof->rubber_nkeys = ncodes;
+        }
         return 0;
     }
     return 0;
@@ -489,9 +704,11 @@ static int parse_array(const char **pp, const char *path, struct profile *prof) 
     const char *p = skip_ws(*pp);
     if (*p != '[') return -1;
     p++;
-    int is_curve = !strcmp(path, "pressure.curve");
-    int is_rect = !strcmp(path, "mapping.rect") || !strcmp(path, "mapping.screen");
-    int is_keys = !strcmp(path, "buttons.BTN_STYLUS.keys") || !strcmp(path, "buttons.BTN_TOOL_RUBBER.keys");
+    const char *local;
+    feel_path(path, &local);
+    int is_curve = !strcmp(local, "pressure.curve");
+    int is_rect = !strcmp(local, "mapping.rect") || !strcmp(local, "mapping.screen");
+    int is_keys = !strcmp(local, "buttons.BTN_STYLUS.keys") || !strcmp(local, "buttons.BTN_TOOL_RUBBER.keys");
     double nums[8];
     int codes[8];
     int n = 0;
@@ -580,12 +797,20 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
     }
     if (!strncmp(p, "true", 4)) {
         if (!strcmp(path, "tools.eraserWins")) prof->eraser_wins = 1;
+        if (!strcmp(path, "internal.tools.eraserWins")) {
+            prof->in_ready = 1;
+            prof->in_eraser_wins = 1;
+        }
         if (!strcmp(path, "internal.enabled")) prof->internal_on = 1;
         *pp = p + 4;
         return 0;
     }
     if (!strncmp(p, "false", 5)) {
         if (!strcmp(path, "tools.eraserWins")) prof->eraser_wins = 0;
+        if (!strcmp(path, "internal.tools.eraserWins")) {
+            prof->in_ready = 1;
+            prof->in_eraser_wins = 0;
+        }
         if (!strcmp(path, "internal.enabled")) prof->internal_on = 0;
         *pp = p + 5;
         return 0;
@@ -594,9 +819,15 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
     char *end = NULL;
     double v = strtod(p, &end);
     if (end == p) return -1;
-    if (!strcmp(path, "pressure.deadzone") || !strcmp(path, "pressure.ceiling")) {
+    const char *local;
+    int inn = feel_path(path, &local);
+    if (!strcmp(local, "pressure.deadzone") || !strcmp(local, "pressure.ceiling")) {
         if (v < 0 || v > 1) return -1;
-        if (!strcmp(path, "pressure.ceiling")) prof->ceiling = v;
+        if (inn) {
+            prof->in_ready = 1;
+            if (!strcmp(local, "pressure.ceiling")) prof->in_ceiling = v;
+            else prof->in_deadzone = v;
+        } else if (!strcmp(local, "pressure.ceiling")) prof->ceiling = v;
         else prof->deadzone = v;
     }
     if (!strcmp(path, "mapping.rotation")) {
@@ -877,6 +1108,119 @@ static int fill_shortcut(const int *keys, int nkeys, int down, struct input_even
     return count;
 }
 
+struct invert_map {
+    int report_id;
+    int invert_bit;
+    int inrange_bit;
+};
+
+/* Walk a HID report descriptor and find Digitizer Invert (0x000d003c).
+   Bit 0 is the least significant bit of the first data byte, after the report id. */
+static int parse_invert_map(const unsigned char *desc, int len, struct invert_map *out) {
+    memset(out, 0, sizeof *out);
+    out->invert_bit = -1;
+    out->inrange_bit = -1;
+    unsigned page = 0, size = 0, count = 0, report_id = 0;
+    int have_id = 0;
+    int bit = 0;
+    int range_here = -1;
+    unsigned usages[64];
+    int nusage = 0;
+    struct {
+        unsigned page, size, count, id;
+        int have_id;
+    } stack[8];
+    int sp = 0;
+    int pos = 0;
+    while (pos < len) {
+        unsigned char b = desc[pos++];
+        unsigned type, tag, val = 0;
+        int item_size;
+        if (b == 0xfe) {
+            if (pos + 2 > len) return -1;
+            item_size = desc[pos++];
+            pos++;
+            if (pos + item_size > len) return -1;
+            pos += item_size;
+            continue;
+        }
+        type = (b >> 2) & 3;
+        tag = (b >> 4) & 15;
+        item_size = b & 3;
+        if (item_size == 3) item_size = 4;
+        if (pos + item_size > len) return -1;
+        for (int i = 0; i < item_size; i++) val |= ((unsigned)desc[pos++]) << (8 * i);
+        if (type == 1) {
+            if (tag == 0) page = val;
+            else if (tag == 7) size = val;
+            else if (tag == 8) {
+                if (!have_id || report_id != val) {
+                    bit = 0;
+                    range_here = -1;
+                }
+                report_id = val;
+                have_id = 1;
+            } else if (tag == 9) count = val;
+            else if (tag == 10 && sp < 8) {
+                stack[sp].page = page;
+                stack[sp].size = size;
+                stack[sp].count = count;
+                stack[sp].id = report_id;
+                stack[sp].have_id = have_id;
+                sp++;
+            } else if (tag == 11 && sp > 0) {
+                sp--;
+                page = stack[sp].page;
+                size = stack[sp].size;
+                count = stack[sp].count;
+                report_id = stack[sp].id;
+                have_id = stack[sp].have_id;
+            }
+            continue;
+        }
+        if (type == 2 && tag == 0 && nusage < 64) {
+            if (item_size == 4) usages[nusage++] = val;
+            else usages[nusage++] = (page << 16) | (val & 0xffff);
+            continue;
+        }
+        if (type != 0) continue;
+        if (tag == 8 && size > 0 && count > 0 && bit < 4096) {
+            int constant = val & 1;
+            if (constant || size != 1) {
+                bit += (int)(size * count);
+            } else {
+                int found_invert = -1;
+                int found_range = -1;
+                for (unsigned i = 0; i < count && bit < 4096; i++) {
+                    unsigned u = 0;
+                    if (nusage == 1) u = usages[0];
+                    else if (nusage > 0) u = usages[i < (unsigned)nusage ? i : (unsigned)nusage - 1];
+                    if (u == 0x000d003c && found_invert < 0) found_invert = bit;
+                    if (u == 0x000d0032 && found_range < 0) found_range = bit;
+                    bit++;
+                }
+                if (found_range >= 0) range_here = found_range;
+                if (out->invert_bit < 0 && found_invert >= 0) {
+                    out->report_id = (int)report_id;
+                    out->invert_bit = found_invert;
+                    out->inrange_bit = found_range >= 0 ? found_range : range_here;
+                }
+            }
+        }
+        nusage = 0;
+    }
+    return out->invert_bit < 0 ? -1 : 0;
+}
+
+/* Rising edge of Invert while the pen stays in range. Leaving range clears it
+   so the next entry can click again, without counting the exit itself. */
+static int invert_rise(int *down, int in_range, int invert) {
+    if (!in_range) invert = 0;
+    int rise = invert && !*down;
+    *down = invert;
+    return rise;
+}
+
 #ifdef STYLUSCTRL_TEST
 
 static int failures;
@@ -982,6 +1326,27 @@ static void test_repeat_pen_is_not_duplicated(void) {
     expect("y kept", find_abs(out, n, ABS_Y), 10);
 }
 
+static void test_stylus_hold_eraser(void) {
+    struct profile p;
+    memset(&p, 0, sizeof p);
+    profile_reset(&p);
+    p.stylus_action = STYLUS_ERASER;
+    struct tool_state st = {.axes = AXIS_ALL, .phys_pen = 1, .sent_pen = 1};
+    struct input_event down[2] = {ev_key(BTN_STYLUS, 1), ev_syn()};
+    struct input_event out[8];
+    int n = emit_report(&st, down, 2, out, 8, &p);
+    expect("hold hides pen", count_key(out, n, BTN_TOOL_PEN, 0), 1);
+    expect("hold shows rubber", count_key(out, n, BTN_TOOL_RUBBER, 1), 1);
+    expect("hold swallows stylus", count_key(out, n, BTN_STYLUS, 1), 0);
+    struct input_event up[2] = {ev_key(BTN_STYLUS, 0), ev_syn()};
+    n = emit_report(&st, up, 2, out, 8, &p);
+    expect("release restores pen", count_key(out, n, BTN_TOOL_PEN, 1), 1);
+    expect("release clears rubber", count_key(out, n, BTN_TOOL_RUBBER, 0), 1);
+    const char *text = "{\"buttons\":{\"BTN_STYLUS\":{\"action\":\"eraser\"}}}";
+    expect("stylus eraser parse", parse_config(text, &p), 0);
+    expect("stylus eraser act", p.stylus_action, STYLUS_ERASER);
+}
+
 static void test_stylus_survives_rubber(void) {
     struct tool_state st = {.axes = AXIS_ALL, .phys_pen = 1, .phys_rubber = 1, .sent_pen = 0};
     struct input_event in[4] = {ev_key(BTN_STYLUS, 1), ev_abs(ABS_DISTANCE, 9), ev_key(KEY_A, 1),
@@ -1025,6 +1390,7 @@ static void test_parse_roadmap(void) {
     expect("internal default", p.internal_on, 0);
     expect("internal parse", parse_config("{\"internal\":{\"enabled\":true}}", &p), 0);
     expect("internal on", p.internal_on, 1);
+    expect("internal feel absent", p.in_ready, 0);
     expect("ceiling default", p.ceiling == 1.0, 1);
     expect("chord3", parse_config("{\"buttons\":{\"BTN_STYLUS\":{\"action\":\"shortcut\",\"keys\":[\"CTRL\",\"SHIFT\",\"Z\"]}}}", &p), 0);
     expect("chord n", p.stylus_nkeys, 3);
@@ -1222,6 +1588,100 @@ static void test_button_actions(void) {
     kn = fill_shortcut(p.stylus_keys, p.stylus_nkeys, 0, keys, 4);
     expect("z up first", keys[0].code == KEY_Z && keys[0].value == 0, 1);
     expect("ctrl up last", keys[1].code == KEY_LEFTCTRL && keys[1].value == 0, 1);
+    int code = 0;
+    expect("f1 name", key_code("F1", &code), 0);
+    expect("f1 code", code, KEY_F1);
+    expect("f12 name", key_code("f12", &code), 0);
+    expect("f12 code", code, KEY_F12);
+    expect("back name", key_code("BACK", &code), 0);
+    expect("back code", code, KEY_BACK);
+    expect("recent name", key_code("RECENT", &code), 0);
+    expect("recent code", code, KEY_SCALE);
+    expect("not f13", key_code("F13", &code), -1);
+
+    static const unsigned char desc[] = {
+        0x05, 0x0d, 0x09, 0x20, 0xa1, 0x01, 0x85, 0x06, 0x09, 0x42, 0x09, 0x44, 0x09, 0x45, 0x09, 0x3c, 0x09,
+        0x32, 0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x05, 0x81, 0x02, 0x09, 0x30, 0x75, 0x10, 0x95, 0x01,
+        0x81, 0x02, 0xc0};
+    struct invert_map map;
+    expect("invert parse", parse_invert_map(desc, (int)sizeof desc, &map), 0);
+    expect("invert report", map.report_id, 6);
+    expect("invert bit", map.invert_bit, 3);
+    expect("inrange bit", map.inrange_bit, 4);
+    static const unsigned char padded[] = {
+        0x85, 0x02, 0x75, 0x01, 0x95, 0x01, 0x81, 0x03, 0x05, 0x0d, 0x09, 0x3c, 0x75, 0x01, 0x95, 0x01, 0x81, 0x02};
+    expect("padded parse", parse_invert_map(padded, (int)sizeof padded, &map), 0);
+    expect("padded bit", map.invert_bit, 1);
+    expect("padded range", map.inrange_bit, -1);
+    int down = 0;
+    expect("hover idle", invert_rise(&down, 1, 0), 0);
+    expect("second press", invert_rise(&down, 1, 1), 1);
+    expect("still held", invert_rise(&down, 1, 1), 0);
+    expect("release", invert_rise(&down, 1, 0), 0);
+    expect("press again", invert_rise(&down, 1, 1), 1);
+    expect("leave range", invert_rise(&down, 0, 1), 0);
+    expect("down cleared", down, 0);
+    expect("come back", invert_rise(&down, 1, 1), 1);
+
+    p.rubber_action = RUBBER_STYLUS2;
+    struct tool_state held = {
+        .axes = AXIS_ALL, .phys_pen = 1, .sent_pen = 1, .sent_stylus2 = 1, .invert_known = 1, .invert_down = 0};
+    struct input_event only_syn[1] = {ev_syn()};
+    n = emit_report(&held, only_syn, 1, out, 8, &p);
+    expect("stylus2 follows release", count_key(out, n, BTN_STYLUS2, 0), 1);
+}
+
+static int count_type(const struct input_event *out, int n, int type, int code, int value) {
+    int count = 0;
+    for (int i = 0; i < n; i++) {
+        if (out[i].type == type && out[i].code == code && out[i].value == value) count++;
+    }
+    return count;
+}
+
+static void test_internal_feel(void) {
+    struct profile p;
+    memset(&p, 0, sizeof p);
+    profile_reset(&p);
+    const char *text =
+        "{\"pressure\":{\"deadzone\":0.2,\"ceiling\":0.9},"
+        "\"buttons\":{\"BTN_STYLUS\":{\"action\":\"shortcut\",\"keys\":[\"CTRL\",\"Z\"]}},"
+        "\"internal\":{\"enabled\":true,\"pressure\":{\"deadzone\":0.5},"
+        "\"buttons\":{\"BTN_STYLUS\":{\"action\":\"passthrough\"},"
+        "\"BTN_TOOL_RUBBER\":{\"action\":\"shortcut\",\"keys\":[\"SPACE\"]}}}}";
+    expect("internal parse", parse_config(text, &p), 0);
+    expect("external dead", p.deadzone == 0.2, 1);
+    expect("internal dead", p.in_deadzone == 0.5, 1);
+    expect("external still shortcut", p.stylus_action, STYLUS_SHORTCUT);
+    expect("internal stylus pass", p.in_stylus_action, STYLUS_PASS);
+    expect("internal rubber shortcut", p.in_rubber_action, RUBBER_SHORTCUT);
+    expect("internal space", p.in_rubber_keys[0], KEY_SPACE);
+    expect("ready", p.in_ready, 1);
+    struct profile view;
+    view_for_pen(&p, 0, &view);
+    expect("external view dead", view.deadzone == 0.2, 1);
+    expect("external view shortcut", view.stylus_action, STYLUS_SHORTCUT);
+    view_for_pen(&p, 1, &view);
+    expect("internal view dead", view.deadzone == 0.5, 1);
+    expect("internal view pass", view.stylus_action, STYLUS_PASS);
+    expect("span ignored", parse_config("{\"mapping\":{\"span\":[100,200]}}", &p), 0);
+}
+
+static void test_relay_dock(void) {
+    struct tool_state st = {.axes = AXIS_ALL, .relay = 1};
+    struct input_event sw;
+    memset(&sw, 0, sizeof sw);
+    sw.type = EV_SW;
+    sw.code = SW_PEN_INSERTED;
+    sw.value = 1;
+    struct input_event in[5] = {ev_abs(ABS_DISTANCE, 40), ev_key(KEY_HOMEPAGE, 1), ev_key(KEY_SEC_EPEN_EXTRA, 1),
+                                sw, ev_syn()};
+    struct input_event out[8];
+    int n = emit_report(&st, in, 5, out, 8, NULL);
+    expect("relay distance", find_abs(out, n, ABS_DISTANCE), 40);
+    expect("relay home", count_key(out, n, KEY_HOMEPAGE, 1), 1);
+    expect("relay extra", count_key(out, n, KEY_SEC_EPEN_EXTRA, 1), 1);
+    expect("relay dock", count_type(out, n, EV_SW, SW_PEN_INSERTED, 1), 1);
 }
 
 int main(void) {
@@ -1230,12 +1690,15 @@ int main(void) {
     test_rubber_arrival_releases_sent_pen();
     test_rubber_release_restores_pen();
     test_repeat_pen_is_not_duplicated();
+    test_stylus_hold_eraser();
     test_stylus_survives_rubber();
     test_parse_roadmap();
     test_pressure_curve();
     test_rotation_roundtrip();
     test_map_fit_and_stretch();
     test_button_actions();
+    test_internal_feel();
+    test_relay_dock();
     if (failures) {
         fprintf(stderr, "%d failed\n", failures);
         return 1;
@@ -1255,6 +1718,8 @@ static char config_path[256];
 static int kbd_fd = -1;
 static int held_stylus;
 static int held_rubber;
+static int held_stylus_in;
+static int held_rubber_in;
 static long display_ms;
 static int display_inactive_logged;
 
@@ -1294,6 +1759,10 @@ struct axis_setup {
 
 struct pen {
     int fd;
+    int hid_fd;
+    int hid_report;
+    int invert_bit;
+    int inrange_bit;
     int ufd;
     int drop;
     int n;
@@ -1307,7 +1776,7 @@ struct pen {
     char vname[UINPUT_MAX_NAME_SIZE];
     char idc_path[160];
     struct input_id id;
-    struct axis_setup axes[5];
+    struct axis_setup axes[6];
     struct tool_state tool;
     struct input_event pkt[MAX_PACKET];
 };
@@ -1362,6 +1831,15 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
     if (ioctl(ufd, UI_SET_PROPBIT, direct ? INPUT_PROP_DIRECT : INPUT_PROP_POINTER) < 0) goto fail;
     for (int i = 0; i < 5; i++) {
         if (ioctl(ufd, UI_SET_KEYBIT, keys[i]) < 0) goto fail;
+    }
+    /* Grabbing sec_e-pen swallows the dock, the cover, and hover distance.
+       Put those back on the virtual device unchanged. */
+    if (direct) {
+        if (ioctl(ufd, UI_SET_EVBIT, EV_SW) < 0) goto fail;
+        if (ioctl(ufd, UI_SET_KEYBIT, KEY_HOMEPAGE) < 0) goto fail;
+        if (ioctl(ufd, UI_SET_KEYBIT, KEY_SEC_EPEN_EXTRA) < 0) goto fail;
+        if (ioctl(ufd, UI_SET_SWBIT, SW_PEN_INSERTED) < 0) goto fail;
+        if (ioctl(ufd, UI_SET_SWBIT, SW_MACHINE_COVER) < 0) goto fail;
     }
     for (int i = 0; i < naxes; i++) {
         if (!axes[i].present) continue;
@@ -1514,6 +1992,11 @@ static int check_mode(void) {
 }
 
 static void close_pen(struct pen *pen) {
+    if (pen->hid_fd >= 0) {
+        close(pen->hid_fd);
+        pen->hid_fd = -1;
+        pen->tool.invert_known = 0;
+    }
     if (pen->ufd >= 0) {
         ioctl(pen->ufd, UI_DEV_DESTROY);
         close(pen->ufd);
@@ -1566,6 +2049,12 @@ static const char *crop_word(int crop) {
     }
 }
 
+static const char *stylus_word(int act) {
+    if (act == STYLUS_SHORTCUT) return "快捷键";
+    if (act == STYLUS_ERASER) return "按住橡皮";
+    return "原样";
+}
+
 static const char *rubber_word(int act) {
     if (act == RUBBER_SHORTCUT) return "快捷键";
     if (act == RUBBER_STYLUS2) return "BTN_STYLUS2";
@@ -1577,8 +2066,8 @@ static void log_profile(void) {
         log_msg("没有配置文件 %s，坐标和压感原样转发", config_path);
         return;
     }
-    const char *side = cfg.stylus_action == STYLUS_SHORTCUT ? "快捷键" : "原样";
-    log_msg("配置 %s，%s，侧键%s，橡皮位%s，死区 %.2f–%.2f", mode_word(cfg.mode), crop_word(cfg.crop), side,
+    log_msg("配置 %s，%s，侧键%s，橡皮位%s，死区 %.2f–%.2f", mode_word(cfg.mode), crop_word(cfg.crop),
+            stylus_word(cfg.stylus_action),
             rubber_word(cfg.rubber_action), cfg.deadzone, cfg.ceiling > cfg.deadzone ? cfg.ceiling : 1.0);
     if (cfg.has_rect) log_msg("板内矩形 %d,%d-%d,%d", cfg.rect[0], cfg.rect[1], cfg.rect[2], cfg.rect[3]);
     if (cfg.has_screen)
@@ -1586,6 +2075,11 @@ static void log_profile(void) {
     if (cfg.rotation) log_msg("数位板旋转 %d", cfg.rotation * 90);
     if (cfg.has_match) log_msg("只抓 %04x:%04x", cfg.vendor, cfg.product);
     if (cfg.curve_n) log_msg("压感曲线已加载");
+    if (cfg.in_ready) {
+        log_msg("内屏单独一份，侧键%s，橡皮位%s，死区 %.2f–%.2f", stylus_word(cfg.in_stylus_action),
+                rubber_word(cfg.in_rubber_action),
+                cfg.in_deadzone, cfg.in_ceiling > cfg.in_deadzone ? cfg.in_ceiling : 1.0);
+    }
 }
 
 static char *read_file(const char *path, int *missing) {
@@ -1778,7 +2272,7 @@ static void sync_idc(struct pen *pen) {
 static int open_virtual(struct pen *pen) {
     sync_idc(pen);
     int ufd = -1;
-    if (create_uinput(pen->vname, &pen->id, pen->axes, 5, pen->direct, &ufd) < 0) return -1;
+    if (create_uinput(pen->vname, &pen->id, pen->axes, 6, pen->direct, &ufd) < 0) return -1;
     if (pen->ufd >= 0) {
         ioctl(pen->ufd, UI_DEV_DESTROY);
         close(pen->ufd);
@@ -1810,8 +2304,8 @@ static void rotate_tilt(int rot, int tx, int ty, int *ox, int *oy) {
     }
 }
 
-static int apply_axes(struct pen *pen, const struct input_event *in, int nin, struct input_event *out, int nout,
-                      int cap) {
+static int apply_axes(struct pen *pen, const struct profile *prof, const struct input_event *in, int nin,
+                      struct input_event *out, int nout, int cap) {
     int x = pen->last_x;
     int y = pen->last_y;
     int pressure = pen->last_pressure;
@@ -1840,11 +2334,11 @@ static int apply_axes(struct pen *pen, const struct input_event *in, int nin, st
     int my = y;
     /* The internal digitizer is already the panel. Keep its coordinates and
        only reshape pressure and buttons. */
-    if (!pen->direct) map_point(&cfg, pen->xmin, pen->xmax, pen->ymin, pen->ymax, x, y, &mx, &my);
-    int mp = pressure_out(&cfg, pressure, pen->pmin, pen->pmax);
+    if (!pen->direct) map_point(prof, pen->xmin, pen->xmax, pen->ymin, pen->ymax, x, y, &mx, &my);
+    int mp = pressure_out(prof, pressure, pen->pmin, pen->pmax);
     int mtx = tilt_x;
     int mty = tilt_y;
-    if (!pen->direct && cfg.rotation) rotate_tilt(cfg.rotation, tilt_x, tilt_y, &mtx, &mty);
+    if (!pen->direct && prof->rotation) rotate_tilt(prof->rotation, tilt_x, tilt_y, &mtx, &mty);
     int have_tx = 0;
     int have_ty = 0;
     for (int i = 0; i < nout; i++) {
@@ -1860,7 +2354,7 @@ static int apply_axes(struct pen *pen, const struct input_event *in, int nin, st
             have_ty = 1;
         }
     }
-    if (saw_tilt && !pen->direct && cfg.rotation && (!have_tx || !have_ty)) {
+    if (saw_tilt && !pen->direct && prof->rotation && (!have_tx || !have_ty)) {
         int syn = -1;
         for (int i = 0; i < nout; i++) {
             if (out[i].type == EV_SYN && out[i].code == SYN_REPORT) syn = i;
@@ -1902,15 +2396,24 @@ static void emit_shortcut(const int *keys, int nkeys, int down) {
     }
 }
 
+/* One click, not a hold. A held key is repeated by the focused window after
+   about half a second. The eraser tool stays down for the whole hover. */
+static void emit_click(const int *keys, int nkeys) {
+    emit_shortcut(keys, nkeys, 1);
+    emit_shortcut(keys, nkeys, 0);
+}
+
+static void release_chord(int *held, const int *keys, int nkeys) {
+    if (!*held) return;
+    emit_shortcut(keys, nkeys, 0);
+    *held = 0;
+}
+
 static void release_held(void) {
-    if (held_stylus) {
-        emit_shortcut(cfg.stylus_keys, cfg.stylus_nkeys, 0);
-        held_stylus = 0;
-    }
-    if (held_rubber) {
-        emit_shortcut(cfg.rubber_keys, cfg.rubber_nkeys, 0);
-        held_rubber = 0;
-    }
+    release_chord(&held_stylus, cfg.stylus_keys, cfg.stylus_nkeys);
+    release_chord(&held_rubber, cfg.rubber_keys, cfg.rubber_nkeys);
+    release_chord(&held_stylus_in, cfg.in_stylus_keys, cfg.in_stylus_nkeys);
+    release_chord(&held_rubber_in, cfg.in_rubber_keys, cfg.in_rubber_nkeys);
 }
 
 static int create_keyboard(const int *codes, int ncodes) {
@@ -1946,13 +2449,18 @@ static int kbd_codes[16];
 static int kbd_ncodes;
 
 static int wants_keyboard(void) {
-    return cfg_loaded && (cfg.stylus_action == STYLUS_SHORTCUT || cfg.rubber_action == RUBBER_SHORTCUT);
+    if (!cfg_loaded) return 0;
+    if (cfg.stylus_action == STYLUS_SHORTCUT || cfg.rubber_action == RUBBER_SHORTCUT) return 1;
+    if (cfg.internal_on && cfg.in_ready &&
+        (cfg.in_stylus_action == STYLUS_SHORTCUT || cfg.in_rubber_action == RUBBER_SHORTCUT))
+        return 1;
+    return 0;
 }
 
 static int collect_bound_keys(int *out, int cap) {
     int n = 0;
-    const int *lists[2];
-    int counts[2];
+    const int *lists[4];
+    int counts[4];
     int nlists = 0;
     if (cfg.stylus_action == STYLUS_SHORTCUT && cfg.stylus_nkeys > 0) {
         lists[nlists] = cfg.stylus_keys;
@@ -1962,6 +2470,16 @@ static int collect_bound_keys(int *out, int cap) {
     if (cfg.rubber_action == RUBBER_SHORTCUT && cfg.rubber_nkeys > 0) {
         lists[nlists] = cfg.rubber_keys;
         counts[nlists] = cfg.rubber_nkeys;
+        nlists++;
+    }
+    if (cfg.internal_on && cfg.in_ready && cfg.in_stylus_action == STYLUS_SHORTCUT && cfg.in_stylus_nkeys > 0) {
+        lists[nlists] = cfg.in_stylus_keys;
+        counts[nlists] = cfg.in_stylus_nkeys;
+        nlists++;
+    }
+    if (cfg.internal_on && cfg.in_ready && cfg.in_rubber_action == RUBBER_SHORTCUT && cfg.in_rubber_nkeys > 0) {
+        lists[nlists] = cfg.in_rubber_keys;
+        counts[nlists] = cfg.in_rubber_nkeys;
         nlists++;
     }
     for (int i = 0; i < nlists; i++) {
@@ -2029,9 +2547,14 @@ static void resync_pen(struct pen *pen) {
     int mx = pen->last_x;
     int my = pen->last_y;
     int mp = pen->last_pressure;
+    struct profile view;
+    int have_view = 0;
     if (cfg_loaded) {
-        map_point(&cfg, pen->xmin, pen->xmax, pen->ymin, pen->ymax, pen->last_x, pen->last_y, &mx, &my);
-        mp = pressure_out(&cfg, pen->last_pressure, pen->pmin, pen->pmax);
+        view_for_pen(&cfg, pen->direct, &view);
+        have_view = 1;
+        if (!pen->direct)
+            map_point(&view, pen->xmin, pen->xmax, pen->ymin, pen->ymax, pen->last_x, pen->last_y, &mx, &my);
+        mp = pressure_out(&view, pen->last_pressure, pen->pmin, pen->pmax);
     }
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -2040,14 +2563,24 @@ static void resync_pen(struct pen *pen) {
     stamp_ev(&evs[n++], &ts, EV_ABS, ABS_X, mx);
     stamp_ev(&evs[n++], &ts, EV_ABS, ABS_Y, my);
     stamp_ev(&evs[n++], &ts, EV_ABS, ABS_PRESSURE, mp);
-    stamp_ev(&evs[n++], &ts, EV_KEY, BTN_TOOL_PEN, pen->tool.sent_pen);
-    if (!cfg_loaded || cfg.rubber_action == RUBBER_ERASER) {
-        stamp_ev(&evs[n++], &ts, EV_KEY, BTN_TOOL_RUBBER, pen->tool.phys_rubber);
-    } else if (cfg.rubber_action == RUBBER_STYLUS2) {
+    int pen_down = pen->tool.sent_pen;
+    int rubber_down = pen->tool.phys_rubber;
+    int stamp_rubber = !have_view || view.rubber_action == RUBBER_ERASER;
+    if (have_view && view.stylus_action == STYLUS_ERASER && pen->tool.phys_stylus) {
+        pen_down = 0;
+        rubber_down = 1;
+        stamp_rubber = 1;
+    }
+    stamp_ev(&evs[n++], &ts, EV_KEY, BTN_TOOL_PEN, pen_down);
+    pen->tool.sent_pen = pen_down;
+    if (stamp_rubber) {
+        stamp_ev(&evs[n++], &ts, EV_KEY, BTN_TOOL_RUBBER, rubber_down);
+        pen->tool.sent_rubber = rubber_down;
+    } else if (view.rubber_action == RUBBER_STYLUS2) {
         stamp_ev(&evs[n++], &ts, EV_KEY, BTN_STYLUS2, pen->tool.phys_rubber);
     }
     stamp_ev(&evs[n++], &ts, EV_KEY, BTN_TOUCH, pen->tool.phys_touch);
-    if (!cfg_loaded || cfg.stylus_action == STYLUS_PASS) {
+    if (!have_view || view.stylus_action == STYLUS_PASS) {
         stamp_ev(&evs[n++], &ts, EV_KEY, BTN_STYLUS, pen->tool.phys_stylus);
     }
     stamp_ev(&evs[n++], &ts, EV_SYN, SYN_REPORT, 0);
@@ -2060,17 +2593,10 @@ static void resync_pen(struct pen *pen) {
 }
 
 static void resync_shortcuts(struct pen *pens, int npens) {
-    if (!cfg_loaded || kbd_fd < 0) return;
-    for (int i = 0; i < npens; i++) {
-        if (cfg.stylus_action == STYLUS_SHORTCUT && pens[i].tool.phys_stylus && !held_stylus) {
-            emit_shortcut(cfg.stylus_keys, cfg.stylus_nkeys, 1);
-            held_stylus = 1;
-        }
-        if (cfg.rubber_action == RUBBER_SHORTCUT && pens[i].tool.phys_rubber && !held_rubber) {
-            emit_shortcut(cfg.rubber_keys, cfg.rubber_nkeys, 1);
-            held_rubber = 1;
-        }
-    }
+    /* Shortcuts are clicks. Reloading must not press them again just because
+       the eraser or the side button is still down. */
+    (void)pens;
+    (void)npens;
 }
 
 static void forward_packet(struct pen *pen) {
@@ -2080,14 +2606,19 @@ static void forward_packet(struct pen *pen) {
     int prev_touch = pen->tool.phys_touch;
     int prev_stylus = pen->tool.phys_stylus;
     struct input_event out[MAX_PACKET + 4];
-    const struct profile *prof = cfg_loaded ? &cfg : NULL;
+    struct profile view;
+    const struct profile *prof = NULL;
+    if (cfg_loaded) {
+        view_for_pen(&cfg, pen->direct, &view);
+        prof = &view;
+    }
     int n = emit_report(&pen->tool, pen->pkt, in_n, out, MAX_PACKET + 4, prof);
     if (n < 0) {
         pen->n = 0;
         log_msg("%s 报告写不下，丢掉这一帧", pen->path);
         return;
     }
-    if (prof) n = apply_axes(pen, pen->pkt, in_n, out, n, MAX_PACKET + 4);
+    if (prof) n = apply_axes(pen, prof, pen->pkt, in_n, out, n, MAX_PACKET + 4);
     pen->n = 0;
     pen->seen = 1;
     if (pen->ufd < 0) return;
@@ -2098,14 +2629,13 @@ static void forward_packet(struct pen *pen) {
             return;
         }
     }
-    if (prof && prof->stylus_action == STYLUS_SHORTCUT && prev_stylus != pen->tool.phys_stylus) {
-        emit_shortcut(prof->stylus_keys, prof->stylus_nkeys, pen->tool.phys_stylus);
-        held_stylus = pen->tool.phys_stylus;
-    }
-    if (prof && prof->rubber_action == RUBBER_SHORTCUT && prev_rubber != pen->tool.phys_rubber) {
-        emit_shortcut(prof->rubber_keys, prof->rubber_nkeys, pen->tool.phys_rubber);
-        held_rubber = pen->tool.phys_rubber;
-    }
+    if (prof && prof->stylus_action == STYLUS_SHORTCUT && !prev_stylus && pen->tool.phys_stylus)
+        emit_click(prof->stylus_keys, prof->stylus_nkeys);
+    /* When Invert is visible on hidraw, the evdev tool bit stays down for the
+       whole hover and cannot show a second press. Clicks come from hidraw. */
+    if (prof && prof->rubber_action == RUBBER_SHORTCUT && !pen->tool.invert_known && !prev_rubber &&
+        pen->tool.phys_rubber)
+        emit_click(prof->rubber_keys, prof->rubber_nkeys);
     log_tool(pen, prev_pen, prev_rubber, prev_touch, prev_stylus);
 }
 
@@ -2170,6 +2700,118 @@ static int already_open(struct pen *pens, int npens, const char *path) {
     return 0;
 }
 
+static int hid_bit(const unsigned char *data, int len, int bit) {
+    if (bit < 0) return 0;
+    int byte = bit / 8;
+    if (byte < 0 || byte >= len) return 0;
+    return (data[byte] >> (bit % 8)) & 1;
+}
+
+static void push_stylus2(struct pen *pen, int down) {
+    if (pen->ufd < 0 || pen->tool.sent_stylus2 == down) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    struct input_event ev;
+    stamp_ev(&ev, &ts, EV_KEY, BTN_STYLUS2, down);
+    if (write_all(pen->ufd, &ev, sizeof ev) < 0) return;
+    stamp_ev(&ev, &ts, EV_SYN, SYN_REPORT, 0);
+    if (write_all(pen->ufd, &ev, sizeof ev) < 0) return;
+    pen->tool.sent_stylus2 = down;
+}
+
+static void close_hid(struct pen *pen) {
+    if (pen->hid_fd < 0) return;
+    close(pen->hid_fd);
+    pen->hid_fd = -1;
+    pen->tool.invert_known = 0;
+}
+
+static void drain_hid(struct pen *pen) {
+    unsigned char buf[256];
+    while (pen->hid_fd >= 0) {
+        ssize_t got = read(pen->hid_fd, buf, sizeof buf);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            log_msg("%s 的 hidraw 断开: %s", pen->path, strerror(errno));
+            close_hid(pen);
+            return;
+        }
+        if (got == 0) {
+            close_hid(pen);
+            return;
+        }
+        const unsigned char *data = buf;
+        int dlen = (int)got;
+        if (pen->hid_report) {
+            if (buf[0] != (unsigned char)pen->hid_report) continue;
+            data = buf + 1;
+            dlen--;
+        }
+        int in_range = pen->inrange_bit < 0 ? 1 : hid_bit(data, dlen, pen->inrange_bit);
+        int invert = hid_bit(data, dlen, pen->invert_bit);
+        int rise = invert_rise(&pen->tool.invert_down, in_range, invert);
+        if (!cfg_loaded) continue;
+        struct profile view;
+        view_for_pen(&cfg, pen->direct, &view);
+        if (rise && view.rubber_action == RUBBER_SHORTCUT && view.rubber_nkeys > 0)
+            emit_click(view.rubber_keys, view.rubber_nkeys);
+        if (view.rubber_action == RUBBER_STYLUS2) push_stylus2(pen, pen->tool.invert_down);
+    }
+}
+
+static int open_pen_hidraw(struct pen *pen) {
+    const char *slash = strrchr(pen->path, '/');
+    const char *name = slash ? slash + 1 : pen->path;
+    const char *fmts[] = {"/sys/class/input/%s/device/device/hidraw", "/sys/class/input/%s/device/hidraw"};
+    char dirpath[160];
+    DIR *dir = NULL;
+    for (int i = 0; i < 2 && !dir; i++) {
+        snprintf(dirpath, sizeof dirpath, fmts[i], name);
+        dir = opendir(dirpath);
+    }
+    if (!dir) return -1;
+    char node[32] = {0};
+    struct dirent *ent;
+    while ((ent = readdir(dir))) {
+        if (strncmp(ent->d_name, "hidraw", 6) != 0) continue;
+        if (strlen(ent->d_name) >= sizeof node) continue;
+        memcpy(node, ent->d_name, strlen(ent->d_name) + 1);
+        break;
+    }
+    closedir(dir);
+    if (!node[0]) return -1;
+    char dev[64];
+    snprintf(dev, sizeof dev, "/dev/%s", node);
+    int fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        log_msg("打开 %s 失败: %s", dev, strerror(errno));
+        return -1;
+    }
+    struct hidraw_report_descriptor rdesc;
+    memset(&rdesc, 0, sizeof rdesc);
+    rdesc.size = HID_MAX_DESCRIPTOR_SIZE;
+    if (ioctl(fd, HIDIOCGRDESC, &rdesc) < 0 || rdesc.size == 0 || rdesc.size > HID_MAX_DESCRIPTOR_SIZE) {
+        log_msg("%s 读不到报告描述符: %s", dev, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    struct invert_map map;
+    if (parse_invert_map(rdesc.value, (int)rdesc.size, &map) != 0) {
+        log_msg("%s 的描述符里没有 Invert", dev);
+        close(fd);
+        return -1;
+    }
+    pen->hid_fd = fd;
+    pen->hid_report = map.report_id;
+    pen->invert_bit = map.invert_bit;
+    pen->inrange_bit = map.inrange_bit;
+    pen->tool.invert_known = 1;
+    pen->tool.invert_down = 0;
+    log_msg("%s 第二侧键读 HID Invert，报告 %d，位 %d", pen->path, map.report_id, map.invert_bit);
+    return 0;
+}
+
 static void try_add(struct pen *pens, int *npens, const char *path) {
     if (*npens >= MAX_PENS || already_open(pens, *npens, path)) return;
     int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -2208,11 +2850,12 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         return;
     }
 
-    int codes[] = {ABS_X, ABS_Y, ABS_PRESSURE, ABS_TILT_X, ABS_TILT_Y};
-    struct axis_setup axes[5];
+    int codes[] = {ABS_X, ABS_Y, ABS_PRESSURE, ABS_TILT_X, ABS_TILT_Y, ABS_DISTANCE};
+    struct axis_setup axes[6];
     memset(axes, 0, sizeof axes);
     unsigned mask = 0;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
+        if (codes[i] == ABS_DISTANCE && !internal) continue;
         axes[i].code = codes[i];
         if (!bit_is_set(absbits, codes[i])) continue;
         if (ioctl(fd, EVIOCGABS(codes[i]), &axes[i].info) < 0) {
@@ -2242,8 +2885,10 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     struct pen *pen = &pens[*npens];
     memset(pen, 0, sizeof *pen);
     pen->fd = fd;
+    pen->hid_fd = -1;
     pen->ufd = -1;
     pen->direct = internal;
+    pen->tool.relay = internal;
     pen->tool.axes = mask;
     memcpy(pen->axes, axes, sizeof axes);
     pen->id = id;
@@ -2265,6 +2910,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         return;
     }
     (*npens)++;
+    if (!internal) open_pen_hidraw(pen);
     char sysname[64];
     char node[64];
     if (uinput_sysname(pen->ufd, sysname, sizeof sysname) == 0) event_node(sysname, node, sizeof node);
@@ -2374,13 +3020,24 @@ static int run_daemon(void) {
             reload_flag = 0;
             reload_config(pens, &npens);
         }
-        struct pollfd pfds[MAX_PENS + 1];
+        struct pollfd pfds[MAX_PENS * 2 + 1];
         int nfd = 0;
         for (int i = 0; i < npens; i++) {
             pfds[nfd].fd = pens[i].fd;
             pfds[nfd].events = POLLIN;
             pfds[nfd].revents = 0;
             nfd++;
+        }
+        int hid_pen[MAX_PENS];
+        int nhid = 0;
+        for (int i = 0; i < npens; i++) {
+            if (pens[i].hid_fd < 0) continue;
+            hid_pen[nhid] = i;
+            pfds[nfd].fd = pens[i].hid_fd;
+            pfds[nfd].events = POLLIN;
+            pfds[nfd].revents = 0;
+            nfd++;
+            nhid++;
         }
         int watch_index = -1;
         if (watch >= 0) {
@@ -2398,16 +3055,25 @@ static int run_daemon(void) {
         }
         int saw_watch = 0;
         if (pr > 0) {
+            for (int h = 0; h < nhid; h++) {
+                int slot = npens + h;
+                if (pfds[slot].revents & (POLLIN | POLLERR | POLLHUP)) drain_hid(&pens[hid_pen[h]]);
+            }
             for (int i = npens - 1; i >= 0; i--) {
                 if (pfds[i].revents & (POLLIN | POLLERR | POLLHUP)) drain(&pens[i]);
                 if (pens[i].fd < 0) {
-                    if (held_stylus && pens[i].tool.phys_stylus) {
-                        emit_shortcut(cfg.stylus_keys, cfg.stylus_nkeys, 0);
-                        held_stylus = 0;
-                    }
-                    if (held_rubber && pens[i].tool.phys_rubber) {
-                        emit_shortcut(cfg.rubber_keys, cfg.rubber_nkeys, 0);
-                        held_rubber = 0;
+                    struct profile view;
+                    view_for_pen(&cfg, pens[i].direct, &view);
+                    if (pens[i].direct) {
+                        if (held_stylus_in && pens[i].tool.phys_stylus)
+                            release_chord(&held_stylus_in, view.stylus_keys, view.stylus_nkeys);
+                        if (held_rubber_in && pens[i].tool.phys_rubber)
+                            release_chord(&held_rubber_in, view.rubber_keys, view.rubber_nkeys);
+                    } else {
+                        if (held_stylus && pens[i].tool.phys_stylus)
+                            release_chord(&held_stylus, view.stylus_keys, view.stylus_nkeys);
+                        if (held_rubber && pens[i].tool.phys_rubber)
+                            release_chord(&held_rubber, view.rubber_keys, view.rubber_nkeys);
                     }
                     log_msg("已放开 %s", pens[i].path);
                     pens[i] = pens[npens - 1];

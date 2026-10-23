@@ -1,4 +1,98 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Default language is English. A missing translation falls back to this file.
+     Add values-<language>/strings.xml for another language. Chinese is values-zh. -->
 <resources>
-    <string name="app_name">StylusCtrl</string>
+    <string name="app_name" translatable="false">StylusCtrl</string>
+
+    <string name="nav_map">Mapping</string>
+    <string name="nav_pressure">Pressure</string>
+    <string name="nav_buttons">Buttons</string>
+    <string name="nav_test">Test</string>
+    <string name="nav_internal">Internal</string>
+    <string name="nav_device">Device</string>
+    <string name="save">Save</string>
+    <string name="pen_external">External tablet</string>
+    <string name="pen_internal">Internal pen</string>
+    <string name="pen_external_short">External</string>
+    <string name="pen_internal_short">Internal</string>
+
+    <string name="buttons_hint">The internal profile is used only after grab is turned on from the Internal page.</string>
+    <string name="stylus_title">First side button</string>
+    <string name="stylus_hint">Hold for the eraser, and release to return to the pen tip. A shortcut clicks once and does not repeat while held.</string>
+    <string name="action_passthrough">Leave as is</string>
+    <string name="action_hold_eraser">Hold for eraser</string>
+    <string name="action_shortcut">Shortcut</string>
+    <string name="add_key">Add a key</string>
+    <string name="cancel">Cancel</string>
+    <string name="rubber_title">Eraser slot</string>
+    <string name="rubber_hint">On this tablet the tail eraser and the pen\'s second side button are the same signal. A shortcut clicks once and does not repeat while held. The second side button can be pressed again without leaving hover. The tail eraser clicks again only after it leaves the sensing range and comes back.</string>
+    <string name="action_eraser">Eraser</string>
+    <string name="action_stylus2">Second side button</string>
+    <string name="eraser_wins">Hide the pen tool while the eraser is down</string>
+
+    <string name="pressure_hint">The internal profile is used only after grab is turned on from the Internal page. Coordinates stay unchanged; only pressure is rewritten.</string>
+    <string name="reset">Reset</string>
+    <string name="pressure_graph">Horizontal is how hard you press. Vertical is the pressure sent to the system. The left node\'s horizontal position is the low deadzone: below it, output stays at the start. The right node is the high deadzone: above it, output pins to the end.</string>
+
+    <string name="internal_body">The internal pen has no area mapping. Choose Internal pen on the pressure and button pages; that profile is stored separately from the external tablet. This page only decides whether to grab the internal pen.</string>
+    <string name="internal_switch">Grab the internal pen sec_e-pen</string>
+    <string name="internal_detail">After it is on, sec_e-pen is grabbed. Coordinates pass through, and only this profile\'s pressure and side buttons change. The dock, cover, hover distance, and the original Home key are forwarded unchanged. This version of the module has to be installed.</string>
+
+    <string name="preset_stretch">Stretch to fill</string>
+    <string name="preset_center">Fit, centered</string>
+    <string name="preset_left">Fit, keep left</string>
+    <string name="preset_right">Fit, keep right</string>
+    <string name="preset_top">Fit, keep top</string>
+    <string name="preset_bottom">Fit, keep bottom</string>
+    <string name="preset_custom">Custom</string>
+    <string name="rot_0">Tablet 0°</string>
+    <string name="rot_90" translatable="false">90°</string>
+    <string name="rot_180" translatable="false">180°</string>
+    <string name="rot_270" translatable="false">270°</string>
+    <string name="mapping_hint">Left is the tablet, right is the screen. Tablet rotation can be combined with the crop and the rectangles. When the screen turns, the proportions on the right follow immediately.</string>
+
+    <string name="device_loading">Reading…</string>
+    <string name="test_hint">Draw a stroke below. This page does not fight scrolling for the touch.</string>
+
+    <string name="reading_config">Reading the configuration from root…</string>
+    <string name="no_root">No root. Magisk needs to allow this app.</string>
+    <string name="config_parse_failed">The configuration could not be parsed. The screen is using defaults.</string>
+    <string name="daemon_stopped">The daemon is not running. Saving writes the configuration. It takes effect after the module is installed and the device reboots.</string>
+    <string name="daemon_pid">Daemon pid %1$s</string>
+    <string name="screen_size">\nScreen %1$d×%2$d</string>
+    <string name="no_active_screen">\nNo active screen was read</string>
+    <string name="no_external">No external tablet</string>
+    <string name="axes_scaled">Axis range is now %1$d×%2$d. The rectangle was scaled to match.</string>
+    <string name="tablet_mismatch">This tablet is %1$s. The profile only grabs %2$s.</string>
+    <string name="use_this_tablet">Use this one</string>
+    <string name="match_unsaved">Match is now %1$s. Not saved yet.</string>
+    <string name="chord_max">A shortcut can contain at most eight keys.</string>
+    <string name="curve_readout">Below %1$.0f%% stays at the start. Above %2$.0f%% pins to the end.</string>
+    <string name="unknown_side_key">Unrecognized key on the %1$s side button.</string>
+    <string name="unknown_rubber_key">Unrecognized key in the %1$s eraser slot.</string>
+    <string name="shortcut_needs_key">The %1$s side-button shortcut needs at least one key.</string>
+    <string name="rubber_needs_key">The %1$s eraser shortcut needs at least one key.</string>
+    <string name="writing">Writing…</string>
+    <string name="wrote_notified">Saved. The daemon will reread it.</string>
+    <string name="wrote_stopped">Saved. The daemon is not running. It takes effect after the module is installed and the device reboots.</string>
+    <string name="wrote">Saved.</string>
+    <string name="write_failed">Write failed.</string>
+    <string name="no_input_devices">No input devices were read</string>
+    <string name="no_pen">No tablet or internal pen was seen</string>
+
+    <string name="label_tablet">Tablet</string>
+    <string name="label_screen">Screen</string>
+    <string name="curve_light">Light</string>
+    <string name="curve_heavy">Heavy</string>
+    <string name="curve_output">Output</string>
+    <string name="tool_pen">Pen</string>
+    <string name="tool_eraser">Eraser</string>
+    <string name="tool_finger">Finger</string>
+    <string name="tool_mouse">Mouse</string>
+    <string name="tool_other">Other</string>
+    <string name="side_up">Up</string>
+    <string name="side_primary">First side button</string>
+    <string name="side_secondary">Second side button</string>
+    <string name="side_both">%1$s + %2$s</string>
+    <string name="sample">Pressure %1$.3f    Tool %2$s    Button %3$s</string>
 </resources>

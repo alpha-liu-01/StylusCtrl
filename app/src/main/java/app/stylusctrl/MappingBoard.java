@@ -263,8 +263,8 @@ public class MappingBoard extends View {
         }
         drawHandles(canvas, tc);
         drawHandles(canvas, sc);
-        canvas.drawText("数位板", tabletPad.left + dp(12), tabletPad.top + dp(22), labelPaint);
-        canvas.drawText("屏幕", screenPad.left + dp(12), screenPad.top + dp(22), labelPaint);
+        canvas.drawText(getContext().getString(R.string.label_tablet), tabletPad.left + dp(12), tabletPad.top + dp(22), labelPaint);
+        canvas.drawText(getContext().getString(R.string.label_screen), screenPad.left + dp(12), screenPad.top + dp(22), labelPaint);
     }
 
     private void drawHandles(Canvas canvas, float[] c) {

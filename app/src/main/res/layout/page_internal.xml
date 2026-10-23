@@ -8,7 +8,7 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="这一版只调外接板子。内屏笔的映射、曲线和按键以后放在这里，现在先空着。"
+        android:text="@string/internal_body"
         android:textAppearance="?attr/textAppearanceBodyLarge" />
 
     <com.google.android.material.materialswitch.MaterialSwitch
@@ -16,12 +16,12 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="20dp"
-        android:text="抓取内屏笔 sec_e-pen" />
+        android:text="@string/internal_switch" />
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
-        android:text="打开之后，守护进程会独占内屏笔，坐标原样送出，只改压感和侧键。区域映射不会作用在内屏上。需要已经刷入认这个开关的模块。"
+        android:text="@string/internal_detail"
         android:textAppearance="?attr/textAppearanceBodyMedium" />
 </LinearLayout>

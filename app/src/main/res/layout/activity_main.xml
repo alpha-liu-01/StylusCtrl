@@ -39,14 +39,14 @@
                     android:id="@+id/page_title"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="映射"
+                    android:text="@string/nav_map"
                     android:textAppearance="?attr/textAppearanceHeadlineSmall" />
 
                 <TextView
                     android:id="@+id/page_sub"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="外接数位板"
+                    android:text="@string/pen_external"
                     android:textAppearance="?attr/textAppearanceBodyMedium" />
             </LinearLayout>
 
@@ -54,7 +54,7 @@
                 android:id="@+id/save"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="保存" />
+                android:text="@string/save" />
         </LinearLayout>
 
         <FrameLayout

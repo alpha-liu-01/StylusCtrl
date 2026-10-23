@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
@@ -7,6 +8,39 @@
     android:paddingTop="8dp"
     android:paddingEnd="20dp"
     android:paddingBottom="16dp">
+
+    <com.google.android.material.button.MaterialButtonToggleGroup
+        android:id="@+id/pressure_device"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        app:selectionRequired="true"
+        app:singleSelection="true">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pressure_external"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:checkable="true"
+            android:text="@string/pen_external" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pressure_internal"
+            style="?attr/materialButtonOutlinedStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:checkable="true"
+            android:text="@string/pen_internal" />
+    </com.google.android.material.button.MaterialButtonToggleGroup>
+
+    <TextView
+        android:id="@+id/pressure_hint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/pressure_hint"
+        android:visibility="gone"
+        android:textAppearance="?attr/textAppearanceBodyMedium" />
 
     <app.stylusctrl.CurveGraph
         android:id="@+id/curve"
@@ -33,13 +67,13 @@
             style="?attr/materialButtonOutlinedStyle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="复位" />
+            android:text="@string/reset" />
     </LinearLayout>
 
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="横轴是手的压力，纵轴是送给系统的压力。最左节点的横位置是低位死区，低于它保持起点的输出。最右节点是高位死区，高于它顶到终点。"
+        android:text="@string/pressure_graph"
         android:textAppearance="?attr/textAppearanceBodyMedium" />
 </LinearLayout>

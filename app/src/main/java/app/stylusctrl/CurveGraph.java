@@ -66,11 +66,11 @@ public class CurveGraph extends View {
     @Override
     protected void onDraw(Canvas canvas) {
         layoutPlot();
-        canvas.drawText("轻", plot.left, getHeight() - dp(6), labelPaint);
+        canvas.drawText(getContext().getString(R.string.curve_light), plot.left, getHeight() - dp(6), labelPaint);
         labelPaint.setTextAlign(Paint.Align.RIGHT);
-        canvas.drawText("重", plot.right, getHeight() - dp(6), labelPaint);
+        canvas.drawText(getContext().getString(R.string.curve_heavy), plot.right, getHeight() - dp(6), labelPaint);
         labelPaint.setTextAlign(Paint.Align.LEFT);
-        canvas.drawText("输出", plot.left, plot.top - dp(8), labelPaint);
+        canvas.drawText(getContext().getString(R.string.curve_output), plot.left, plot.top - dp(8), labelPaint);
         canvas.drawLine(plot.left, plot.bottom, plot.right, plot.bottom, axisPaint);
         canvas.drawLine(plot.left, plot.bottom, plot.left, plot.top, axisPaint);
         canvas.drawLine(plot.left, plot.bottom, plot.right, plot.top, guidePaint);

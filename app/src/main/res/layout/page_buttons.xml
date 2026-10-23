@@ -14,11 +14,51 @@
         android:paddingEnd="20dp"
         android:paddingBottom="20dp">
 
+        <com.google.android.material.button.MaterialButtonToggleGroup
+            android:id="@+id/buttons_device"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:selectionRequired="true"
+            app:singleSelection="true">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/buttons_external"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checkable="true"
+                android:text="@string/pen_external" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/buttons_internal"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checkable="true"
+                android:text="@string/pen_internal" />
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+
+        <TextView
+            android:id="@+id/buttons_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/buttons_hint"
+            android:visibility="gone"
+            android:textAppearance="?attr/textAppearanceBodyMedium" />
+
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="第一侧键"
+            android:layout_marginTop="12dp"
+            android:text="@string/stylus_title"
             android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/stylus_hint"
+            android:textAppearance="?attr/textAppearanceBodyMedium" />
 
         <com.google.android.material.button.MaterialButtonToggleGroup
             android:id="@+id/stylus_action"
@@ -34,7 +74,15 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:checkable="true"
-                android:text="原样留下" />
+                android:text="@string/action_passthrough" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/stylus_eraser"
+                style="?attr/materialButtonOutlinedStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checkable="true"
+                android:text="@string/action_hold_eraser" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/stylus_shortcut"
@@ -42,7 +90,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:checkable="true"
-                android:text="快捷键" />
+                android:text="@string/action_shortcut" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
 
         <LinearLayout
@@ -64,20 +112,20 @@
                 style="?attr/materialButtonOutlinedStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="加一个键" />
+                android:text="@string/add_key" />
         </LinearLayout>
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            android:text="橡皮位"
+            android:text="@string/rubber_title"
             android:textAppearance="?attr/textAppearanceTitleMedium" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="这只板子上，尾部橡皮和笔身第二颗侧键是同一个信号。"
+            android:text="@string/rubber_hint"
             android:textAppearance="?attr/textAppearanceBodyMedium" />
 
         <com.google.android.material.button.MaterialButtonToggleGroup
@@ -94,7 +142,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:checkable="true"
-                android:text="橡皮" />
+                android:text="@string/action_eraser" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/rubber_shortcut"
@@ -102,7 +150,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:checkable="true"
-                android:text="快捷键" />
+                android:text="@string/action_shortcut" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/rubber_stylus2"
@@ -110,7 +158,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:checkable="true"
-                android:text="第二侧键" />
+                android:text="@string/action_stylus2" />
         </com.google.android.material.button.MaterialButtonToggleGroup>
 
         <LinearLayout
@@ -132,7 +180,7 @@
                 style="?attr/materialButtonOutlinedStyle"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="加一个键" />
+                android:text="@string/add_key" />
         </LinearLayout>
 
         <com.google.android.material.materialswitch.MaterialSwitch
@@ -140,6 +188,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
-            android:text="橡皮按下时藏起笔尖工具" />
+            android:text="@string/eraser_wins" />
     </LinearLayout>
 </ScrollView>
