@@ -11,7 +11,7 @@
 - 卸掉模块并重启后，板子回到系统原来的映射。
 - 模块不放 IDC。虚拟设备保持指针，`touch.orientationAware` 保持关闭。
 
-设置应用是普通 APK，用 libsu 写 `/data/adb/stylusctrl/config.json`，再向守护进程发 `SIGUSR1`。界面包括当前设备和轴范围、三种映射、压感曲线和测试画布、侧键绑定、内屏笔的开关。测试画布要读 `AXIS_PRESSURE`、工具类型和侧键。这棵树里还没有这份 APK。
+设置应用是普通 APK，包名 `app.stylusctrl`，源码在 `app/`。它用 libsu 写 `/data/adb/stylusctrl/config.json`，再向守护进程发 `SIGUSR1`。界面见下面的「设置界面」。
 
 ## 模块
 
@@ -29,7 +29,9 @@
 
 ## 热插拔
 
-`tools/stylusctld.c` 用 inotify 盯 `/dev/input` 的创建、删除和移动。有事件就再扫一遍，仍按 `INPUT_PROP_POINTER` 加 `ABS_PRESSURE` 挑选，跳过名字以 `StylusCtrl` 开头的节点。配置里的 `match` 继续过滤厂商和产品号。
+`tools/stylusctld.c` 用 inotify 盯 `/dev/input` 的创建、删除和移动。有事件就再扫一遍。外接笔仍按 `INPUT_PROP_POINTER` 加 `ABS_PRESSURE` 挑选，跳过名字以 `StylusCtrl` 开头的节点。配置里的 `match` 继续过滤外接笔的厂商和产品号。
+
+名字正好是 `sec_e-pen` 的内屏笔另算。`internal.enabled` 为真、而且配置已经读到时才抓它，不要求 `INPUT_PROP_POINTER`，也不走 `match`。虚拟设备带 `INPUT_PROP_DIRECT`，坐标原样送出，压感曲线和侧键仍按配置。关掉开关再重读配置时放开这只笔。
 
 inotify 打不开时，仍靠原来的一秒钟轮询。笔还按着的时候不读屏幕尺寸。节点消失走原来的 `POLLHUP`，放开独占并拆掉对应的虚拟设备。
 
@@ -45,9 +47,38 @@ tools/pack-module.sh
 
 装之前先停掉 `adb shell` 里那个 `stylusctld`。两个进程会抢同一只笔节点。用 Magisk 刷这个 zip，然后重启。不要和正在跑的 adb 进程叠在一起。
 
-设置应用还没进仓库。在它写好之前，改 `/data/adb/stylusctrl/config.json`，再 `kill -USR1 $(pidof stylusctld)`。
+```sh
+tools/build-apk.sh
+adb install -r out/stylusctrl.apk
+```
 
-主机编 APK 用的 SDK 在 `~/Android/Sdk`，`ANDROID_HOME` 指到这里。平台是 `android-36`，构建工具是 `36.1.0`。命令行工具在 `cmdline-tools/latest`。Java 是系统里的 OpenJDK 17。
+`tools/build-apk.sh` 把 `sdk.dir` 写进 `local.properties`，编 debug 包，再复制到 `out/stylusctrl.apk`。第一次打开会向 Magisk 要 root。没有模块时，保存仍会写 `/data/adb/stylusctrl/config.json`，守护进程没在跑，刷上模块并重启后才会生效。
+
+主机编 APK 用的 SDK 在 `~/Android/Sdk`，`ANDROID_HOME` 指到这里。平台是 `android-36`，构建工具是 `36.1.0`。命令行工具在 `cmdline-tools/latest`。Java 是系统里的 OpenJDK 17。libsu 从 JitPack 取 `com.github.topjohnwu.libsu:core:5.2.2`。
+
+## 设置界面
+
+2026-10-22 晚，第一版界面能改映射并马上生效。试用里有这些问题，和界面一起改：
+
+1. 插上板子之后，系统把它当成接了一只键盘，软键盘不再弹出，数字填不进去。原因是快捷键虚拟设备注册了整套字母，`KeyboardType` 成了字母键盘。守护进程改为只注册这份配置里实际用到的键。设置界面里映射和曲线改成拖动，不再靠填数字。
+2. 快捷键原来界面上只有一个修饰键加一个主键。守护进程本来就能一次按下最多八个键，界面改成按这个上限加键。除了字母和数字，还可以加空格、回车、Tab、Esc、方向键、退格和删除。
+3. 测试画布写一笔就断，是因为画布躺在整页滚动里面，系统把后续移动拿去滚动了。这不用改系统设置。测试单独一页，不跟滚动抢；一笔按压力分成许多小段，不会整笔被取消。
+4. 界面上的等比居中，第一次实际是板子左侧一块，右侧被裁掉。改成别的再改回来才对。灭屏时 `dumpsys display` 的 viewport 是 `isActive=false`，尺寸会回到竖屏的自然宽高。守护进程若把这个尺寸当成当前屏幕，横屏下的等比就会按竖屏去算，笔的有效区域贴在板子左侧。现在不活动的 viewport 不覆盖已经读到的尺寸，笔放下大约一秒后会重读活动中的屏幕。
+
+界面按 Material 3 重做，左边是导航：
+
+- 映射：左边数位板、右边屏幕，四个角用线连上。预设有拉伸铺满、等比居中、靠左、靠右、靠上、靠下。拖动一角、一条边或整块之后，变成两个矩形拉伸对应，写进 `mapping.rect` 和 `mapping.screen`。
+- 压感：一条可以拖的三次曲线。最左节点的横位置是低位死区 `deadzone`，最右节点是高位死区 `ceiling`。高于高位就顶到曲线终点。
+- 按键：第一侧键和橡皮位。快捷键是一组芯片，最多八个。
+- 测试：整页画布。
+- 内屏：这一页留空。只留一个已经有的开关，打开后抓 `sec_e-pen`，坐标仍然原样。区域映射不加到内屏上。
+- 设备：root、进程和轴范围。
+
+`crop` 的 `left` / `right` / `top` / `bottom` 改成「有效区域靠这一边」。以前这四个词表示裁掉那一边。默认的 `center` 没有改。
+
+映射页会跟着当前窗口的宽高重画。应用声明了自己处理旋转，所以转屏时要在 `onConfigurationChanged` 里读窗口尺寸，不能等下一次读取配置。数位板方向是 `mapping.rotation`，0、90、180、270，先转板子坐标，再做裁切和矩形。压感页有复位，回到示例曲线，低位 0、高位 1。
+
+快捷键设备不再报一整套字母之后，系统才不会把它当成硬件键盘。已经在跑的旧进程要换成 `out/stylusctrl.zip` 里的二进制才有这条，也才认 `mapping.screen` 和 `pressure.ceiling`。
 
 ## 实现笔记
 
@@ -91,6 +122,10 @@ tools/pack-module.sh
 验收里，重启可用和卸掉模块已经勾上。Lineage 小版本这次不做。
 
 当前没有模块。21:29 在 `10.0.0.116:40955` 上又看过一次：`stylusctld` 不在进程里，`getevent` 只有板子原来的三只节点，没有 `StylusCtrl`。
+
+同一天 21:41，第一版设置应用编出来并装上了。`tools/build.sh` 通过，`out/stylusctrl.apk` 约 5.6 MB，`adb install -r` 成功。`am start` 拉起 `app.stylusctrl/.MainActivity`，进程里出现 libsu 的 `RootServerMain`，没有崩溃。当时锁屏挡在前面，屏幕随后又灭了，Magisk 授权和界面上的保存没有在屏幕上确认。
+
+随后这版界面被换掉，见「设置界面」。新的 `out/stylusctrl.zip` 是 v0.4.0，含屏幕矩形、高位死区，以及只注册实际用到的快捷键。
 
 ## 验收
 

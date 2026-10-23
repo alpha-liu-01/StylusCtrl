@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.StylusCtrl" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#1B6B66</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorPrimaryContainer">#A7F0EA</item>
+        <item name="colorOnPrimaryContainer">#00201E</item>
+        <item name="colorSecondary">#6E5A4C</item>
+        <item name="colorSecondaryContainer">#F6DDD0</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

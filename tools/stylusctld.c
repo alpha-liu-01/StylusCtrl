@@ -80,6 +80,10 @@ struct profile {
     double curve[8];
     int curve_n;
     double deadzone;
+    double ceiling;
+    int has_screen;
+    double screen[4];
+    int rotation;
     int stylus_action;
     int rubber_action;
     int eraser_wins;
@@ -87,6 +91,7 @@ struct profile {
     int stylus_nkeys;
     int rubber_keys[8];
     int rubber_nkeys;
+    int internal_on;
     int disp_w;
     int disp_h;
     int orientation;
@@ -190,6 +195,7 @@ static void profile_reset(struct profile *p) {
     p->crop = CROP_CENTER;
     p->rubber_action = RUBBER_ERASER;
     p->eraser_wins = 1;
+    p->ceiling = 1;
     p->disp_w = disp_w;
     p->disp_h = disp_h;
     p->orientation = orientation;
@@ -254,6 +260,46 @@ static int key_code(const char *name, int *code) {
     }
     if (n == 1 && buf[0] == '0') {
         *code = KEY_0;
+        return 0;
+    }
+    if (!strcmp(buf, "SPACE")) {
+        *code = KEY_SPACE;
+        return 0;
+    }
+    if (!strcmp(buf, "ENTER") || !strcmp(buf, "RETURN")) {
+        *code = KEY_ENTER;
+        return 0;
+    }
+    if (!strcmp(buf, "TAB")) {
+        *code = KEY_TAB;
+        return 0;
+    }
+    if (!strcmp(buf, "ESC") || !strcmp(buf, "ESCAPE")) {
+        *code = KEY_ESC;
+        return 0;
+    }
+    if (!strcmp(buf, "UP")) {
+        *code = KEY_UP;
+        return 0;
+    }
+    if (!strcmp(buf, "DOWN")) {
+        *code = KEY_DOWN;
+        return 0;
+    }
+    if (!strcmp(buf, "LEFT")) {
+        *code = KEY_LEFT;
+        return 0;
+    }
+    if (!strcmp(buf, "RIGHT")) {
+        *code = KEY_RIGHT;
+        return 0;
+    }
+    if (!strcmp(buf, "BACKSPACE")) {
+        *code = KEY_BACKSPACE;
+        return 0;
+    }
+    if (!strcmp(buf, "DELETE") || !strcmp(buf, "DEL")) {
+        *code = KEY_DELETE;
         return 0;
     }
     return -1;
@@ -416,6 +462,12 @@ static int assign_array(const char *path, const double *nums, int n, const int *
         prof->has_rect = 1;
         return 0;
     }
+    if (!strcmp(path, "mapping.screen")) {
+        if (n != 4) return -1;
+        for (int i = 0; i < 4; i++) prof->screen[i] = nums[i];
+        prof->has_screen = 1;
+        return 0;
+    }
     if (!strcmp(path, "buttons.BTN_STYLUS.keys")) {
         if (ncodes > 8) return -1;
         for (int i = 0; i < ncodes; i++) prof->stylus_keys[i] = codes[i];
@@ -438,7 +490,7 @@ static int parse_array(const char **pp, const char *path, struct profile *prof) 
     if (*p != '[') return -1;
     p++;
     int is_curve = !strcmp(path, "pressure.curve");
-    int is_rect = !strcmp(path, "mapping.rect");
+    int is_rect = !strcmp(path, "mapping.rect") || !strcmp(path, "mapping.screen");
     int is_keys = !strcmp(path, "buttons.BTN_STYLUS.keys") || !strcmp(path, "buttons.BTN_TOOL_RUBBER.keys");
     double nums[8];
     int codes[8];
@@ -528,11 +580,13 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
     }
     if (!strncmp(p, "true", 4)) {
         if (!strcmp(path, "tools.eraserWins")) prof->eraser_wins = 1;
+        if (!strcmp(path, "internal.enabled")) prof->internal_on = 1;
         *pp = p + 4;
         return 0;
     }
     if (!strncmp(p, "false", 5)) {
         if (!strcmp(path, "tools.eraserWins")) prof->eraser_wins = 0;
+        if (!strcmp(path, "internal.enabled")) prof->internal_on = 0;
         *pp = p + 5;
         return 0;
     }
@@ -540,9 +594,18 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
     char *end = NULL;
     double v = strtod(p, &end);
     if (end == p) return -1;
-    if (!strcmp(path, "pressure.deadzone")) {
+    if (!strcmp(path, "pressure.deadzone") || !strcmp(path, "pressure.ceiling")) {
         if (v < 0 || v > 1) return -1;
-        prof->deadzone = v;
+        if (!strcmp(path, "pressure.ceiling")) prof->ceiling = v;
+        else prof->deadzone = v;
+    }
+    if (!strcmp(path, "mapping.rotation")) {
+        int q = (int)(v >= 0 ? v + 0.5 : v - 0.5);
+        if (q == 90) q = 1;
+        else if (q == 180) q = 2;
+        else if (q == 270) q = 3;
+        if (q < 0 || q > 3) return -1;
+        prof->rotation = q;
     }
     *pp = end;
     return 0;
@@ -564,31 +627,34 @@ static double bezier(double s, double p0, double p1, double p2, double p3) {
 
 static int pressure_out(const struct profile *p, int raw, int pmin, int pmax) {
     if (!p || pmax <= pmin) return raw;
-    if (p->curve_n == 0 && p->deadzone <= 0) return raw;
     double span = (double)(pmax - pmin);
     double t = ((double)raw - (double)pmin) / span;
     if (t < 0) t = 0;
     if (t > 1) t = 1;
-    if (p->deadzone > 0) {
-        if (t <= p->deadzone || p->deadzone >= 1) return pmin;
-        t = (t - p->deadzone) / (1.0 - p->deadzone);
+    double lo = p->deadzone;
+    if (lo < 0) lo = 0;
+    if (lo > 1) lo = 1;
+    double hi = p->ceiling;
+    if (!(hi > lo && hi <= 1.0)) hi = 1.0;
+    if (p->curve_n == 0 && lo <= 0 && hi >= 1.0) return raw;
+    double y0 = p->curve_n ? p->curve[1] : 0;
+    double y1 = p->curve_n ? p->curve[7] : 1;
+    double y;
+    if (t <= lo || hi <= lo) y = y0;
+    else if (t >= hi) y = y1;
+    else if (p->curve_n == 0) y = (t - lo) / (hi - lo);
+    else {
+        t = (t - lo) / (hi - lo);
+        double a = 0;
+        double b = 1;
+        for (int i = 0; i < 24; i++) {
+            double mid = (a + b) / 2.0;
+            double x = bezier(mid, p->curve[0], p->curve[2], p->curve[4], p->curve[6]);
+            if (x < t) a = mid;
+            else b = mid;
+        }
+        y = bezier((a + b) / 2.0, p->curve[1], p->curve[3], p->curve[5], p->curve[7]);
     }
-    if (p->curve_n == 0) {
-        double y = t * span;
-        int out = pmin + (int)(y >= 0 ? y + 0.5 : y - 0.5);
-        if (out < pmin) return pmin;
-        if (out > pmax) return pmax;
-        return out;
-    }
-    double lo = 0;
-    double hi = 1;
-    for (int i = 0; i < 24; i++) {
-        double mid = (lo + hi) / 2.0;
-        double x = bezier(mid, p->curve[0], p->curve[2], p->curve[4], p->curve[6]);
-        if (x < t) lo = mid;
-        else hi = mid;
-    }
-    double y = bezier((lo + hi) / 2.0, p->curve[1], p->curve[3], p->curve[5], p->curve[7]);
     if (y < 0) y = 0;
     if (y > 1) y = 1;
     int out = pmin + (int)(y * span + 0.5);
@@ -664,10 +730,21 @@ static void map_point(const struct profile *p, int xmin, int xmax, int ymin, int
     *oy = y;
     if (!p || p->mode == MODE_PASS || !p->have_display) return;
     if (xmax <= xmin || ymax <= ymin || p->disp_w <= 0 || p->disp_h <= 0) return;
-    int x0 = xmin;
-    int x1 = xmax;
-    int y0 = ymin;
-    int y1 = ymax;
+    /* User rotation is in the tablet's own axes, before fit/stretch/rects.
+       Output is still encoded in the unrotated ABS range, because that is
+       what inputflinger scales. Screen rotation stays in disp_w/disp_h. */
+    int W = xmax - xmin + 1;
+    int H = ymax - ymin + 1;
+    int rot = p->rotation & 3;
+    int spaceW, spaceH;
+    rotated_size(rot, W, H, &spaceW, &spaceH);
+    if (spaceW <= 1 || spaceH <= 1) return;
+    double ru, rv;
+    rotate_pt(rot, W, H, (double)(x - xmin), (double)(y - ymin), &ru, &rv);
+    int x0 = 0;
+    int y0 = 0;
+    int x1 = spaceW - 1;
+    int y1 = spaceH - 1;
     if (p->has_rect) {
         x0 = p->rect[0];
         y0 = p->rect[1];
@@ -683,55 +760,75 @@ static void map_point(const struct profile *p, int xmin, int xmax, int ymin, int
             y0 = y1;
             y1 = t;
         }
-        if (x0 < xmin) x0 = xmin;
-        if (x1 > xmax) x1 = xmax;
-        if (y0 < ymin) y0 = ymin;
-        if (y1 > ymax) y1 = ymax;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > spaceW - 1) x1 = spaceW - 1;
+        if (y1 > spaceH - 1) y1 = spaceH - 1;
         if (x1 < x0 || y1 < y0) return;
     }
-    int cx = x;
-    int cy = y;
-    if (cx < x0) cx = x0;
-    if (cx > x1) cx = x1;
-    if (cy < y0) cy = y0;
-    if (cy > y1) cy = y1;
-    int rw = x1 - x0 + 1;
-    int rh = y1 - y0 + 1;
-    /* External tablet axes stay put. orientationAware would swap them with
-       the viewport and turn a landscape fit into the portrait 12:20 window.
-       disp_w/disp_h are already the oriented viewport. Inputflinger undoes
-       that rotation after the uniform scale. */
-    double lru, lrv;
-    rotate_pt(0, rw, rh, (double)(cx - x0), (double)(cy - y0), &lru, &lrv);
-    int rrw, rrh;
-    rotated_size(0, rw, rh, &rrw, &rrh);
+    int cx = clamp_round(ru, x0, x1);
+    int cy = clamp_round(rv, y0, y1);
+    int rrw = x1 - x0 + 1;
+    int rrh = y1 - y0 + 1;
     if (rrw <= 0 || rrh <= 0) return;
+    double lru = (double)(cx - x0);
+    double lrv = (double)(cy - y0);
+    double dest_x = 0;
+    double dest_y = 0;
+    double dest_w = (double)p->disp_w;
+    double dest_h = (double)p->disp_h;
+    if (p->has_screen) {
+        double x0 = p->screen[0];
+        double y0 = p->screen[1];
+        double x1 = p->screen[2];
+        double y1 = p->screen[3];
+        if (x0 > x1) {
+            double t = x0;
+            x0 = x1;
+            x1 = t;
+        }
+        if (y0 > y1) {
+            double t = y0;
+            y0 = y1;
+            y1 = t;
+        }
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > 1) x1 = 1;
+        if (y1 > 1) y1 = 1;
+        dest_x = x0 * (double)p->disp_w;
+        dest_y = y0 * (double)p->disp_h;
+        dest_w = (x1 - x0) * (double)p->disp_w;
+        dest_h = (y1 - y0) * (double)p->disp_h;
+        if (dest_w < 1 || dest_h < 1) return;
+    }
     double sx, sy;
     if (p->mode == MODE_STRETCH) {
-        sx = lru / (double)rrw * (double)p->disp_w;
-        sy = lrv / (double)rrh * (double)p->disp_h;
+        sx = dest_x + lru / (double)rrw * dest_w;
+        sy = dest_y + lrv / (double)rrh * dest_h;
     } else {
-        double xscale = (double)p->disp_w / (double)rrw;
-        double yscale = (double)p->disp_h / (double)rrh;
+        double xscale = dest_w / (double)rrw;
+        double yscale = dest_h / (double)rrh;
         double fs = xscale > yscale ? xscale : yscale;
         if (fs <= 0) return;
-        double vis_w = (double)p->disp_w / fs;
-        double vis_h = (double)p->disp_h / fs;
+        double vis_w = dest_w / fs;
+        double vis_h = dest_h / fs;
         double origin_x = 0;
         double origin_y = 0;
         int x_over = (double)rrw - vis_w > 1.0;
         int y_over = (double)rrh - vis_h > 1.0;
-        if (p->crop == CROP_LEFT && x_over) origin_x = (double)rrw - vis_w;
-        else if (p->crop == CROP_TOP && y_over) origin_y = (double)rrh - vis_h;
-        else if (p->crop == CROP_CENTER) {
-            if (x_over) origin_x = ((double)rrw - vis_w) / 2.0;
-            if (y_over) origin_y = ((double)rrh - vis_h) / 2.0;
+        /* left/right/top/bottom name the side that stays. The other axis stays centered. */
+        if (x_over) {
+            if (p->crop == CROP_RIGHT) origin_x = (double)rrw - vis_w;
+            else if (p->crop != CROP_LEFT) origin_x = ((double)rrw - vis_w) / 2.0;
         }
-        sx = (lru - origin_x) * fs;
-        sy = (lrv - origin_y) * fs;
+        if (y_over) {
+            if (p->crop == CROP_BOTTOM) origin_y = (double)rrh - vis_h;
+            else if (p->crop != CROP_TOP) origin_y = ((double)rrh - vis_h) / 2.0;
+        }
+        sx = dest_x + (lru - origin_x) * fs;
+        sy = dest_y + (lrv - origin_y) * fs;
     }
-    int W = xmax - xmin + 1;
-    int H = ymax - ymin + 1;
     int rotW, rotH;
     rotated_size(0, W, H, &rotW, &rotH);
     if (rotW <= 0 || rotH <= 0) return;
@@ -925,6 +1022,21 @@ static void test_parse_roadmap(void) {
     expect("z", p.stylus_keys[1], KEY_Z);
     expect("rubber act", p.rubber_action, RUBBER_ERASER);
     expect("wins", p.eraser_wins, 1);
+    expect("internal default", p.internal_on, 0);
+    expect("internal parse", parse_config("{\"internal\":{\"enabled\":true}}", &p), 0);
+    expect("internal on", p.internal_on, 1);
+    expect("ceiling default", p.ceiling == 1.0, 1);
+    expect("chord3", parse_config("{\"buttons\":{\"BTN_STYLUS\":{\"action\":\"shortcut\",\"keys\":[\"CTRL\",\"SHIFT\",\"Z\"]}}}", &p), 0);
+    expect("chord n", p.stylus_nkeys, 3);
+    expect("chord shift", p.stylus_keys[1], KEY_LEFTSHIFT);
+    int space = 0;
+    expect("space", key_code("SPACE", &space), 0);
+    expect("space code", space, KEY_SPACE);
+    expect("screen parse", parse_config("{\"mapping\":{\"screen\":[0.25,0.25,0.75,0.75]},\"pressure\":{\"ceiling\":0.8}}", &p), 0);
+    expect("has screen", p.has_screen, 1);
+    expect("ceiling set", p.ceiling == 0.8, 1);
+    expect("rotation parse", parse_config("{\"mapping\":{\"rotation\":90}}", &p), 0);
+    expect("rotation quarter", p.rotation, 1);
     expect("bad json", parse_config("{", &p), -1);
 }
 
@@ -936,6 +1048,10 @@ static void test_pressure_curve(void) {
     p.deadzone = 0.2;
     expect("deadzone low", pressure_out(&p, 819, 0, 4095), 0);
     expect("deadzone high", pressure_out(&p, 4095, 0, 4095), 4095);
+    p.ceiling = 0.8;
+    expect("ceiling low", pressure_out(&p, 409, 0, 4095), 0);
+    expect("ceiling top", pressure_out(&p, 3686, 0, 4095), 4095);
+    expect("ceiling mid", pressure_out(&p, 2048, 0, 4095), 2048);
     profile_reset(&p);
     const char *curve = "{\"pressure\":{\"curve\":[0.0,0.0,0.4,0.7,1.0,1.0]}}";
     expect("curve parse", parse_config(curve, &p), 0);
@@ -979,20 +1095,17 @@ static void map_of(const struct profile *p, int x, int y, int *ox, int *oy) {
 
 static void test_map_fit_and_stretch(void) {
     int ox, oy;
-    struct profile right = display_profile(MODE_FIT, CROP_RIGHT, 0, 1200, 2000);
-    map_of(&right, 0, 0, &ox, &oy);
-    expect("fit right origin x", ox, 0);
-    expect("fit right origin y", oy, 0);
-    map_of(&right, 15200, 9500, &ox, &oy);
-    expect("fit right far x", ox, 15200);
-    expect("fit right far y", oy, 9500);
+    struct profile keep_left = display_profile(MODE_FIT, CROP_LEFT, 0, 1200, 2000);
+    map_of(&keep_left, 0, 100, &ox, &oy);
+    expect("keep left origin x", ox, 0);
+    map_of(&keep_left, 5700, 100, &ox, &oy);
+    expect("keep left edge x", ox, 5700);
 
-    struct profile left = display_profile(MODE_FIT, CROP_LEFT, 0, 1200, 2000);
-    map_of(&left, 15200, 9500, &ox, &oy);
-    expect("fit left far x", ox, 5700);
-    expect("fit left far y", oy, 9500);
-    map_of(&left, 9500, 0, &ox, &oy);
-    expect("fit left window x", ox, 0);
+    struct profile keep_right = display_profile(MODE_FIT, CROP_RIGHT, 0, 1200, 2000);
+    map_of(&keep_right, 9500, 100, &ox, &oy);
+    expect("keep right start x", ox, 0);
+    map_of(&keep_right, 15200, 100, &ox, &oy);
+    expect("keep right end x", ox, 5700);
 
     struct profile center = display_profile(MODE_FIT, CROP_CENTER, 0, 1200, 2000);
     map_of(&center, 4750, 100, &ox, &oy);
@@ -1021,12 +1134,46 @@ static void test_map_fit_and_stretch(void) {
     expect("land right x", ox, 15200);
     expect("land bottom band y", oy, 9120);
     struct profile bottom = display_profile(MODE_FIT, CROP_BOTTOM, 3, 2000, 1200);
-    map_of(&bottom, 0, 0, &ox, &oy);
-    expect("land bottom origin x", ox, 0);
-    expect("land bottom origin y", oy, 0);
+    map_of(&bottom, 15200, 380, &ox, &oy);
+    expect("land bottom start y", oy, 0);
     map_of(&bottom, 15200, 9500, &ox, &oy);
-    expect("land bottom x", ox, 15200);
-    expect("land bottom y", oy, 9500);
+    expect("land bottom end x", ox, 15200);
+    expect("land bottom end y", oy, 9120);
+
+    struct profile screen = display_profile(MODE_STRETCH, CROP_CENTER, 0, 2000, 1200);
+    screen.has_screen = 1;
+    screen.screen[0] = 0.25;
+    screen.screen[1] = 0.25;
+    screen.screen[2] = 0.75;
+    screen.screen[3] = 0.75;
+    map_of(&screen, 0, 0, &ox, &oy);
+    expect("screen rect origin x", ox, 3800);
+    expect("screen rect origin y", oy, 2280);
+    map_of(&screen, 15200, 9500, &ox, &oy);
+    expect("screen rect far x", ox, 11400);
+    expect("screen rect far y", oy, 6840);
+
+    struct profile spin = display_profile(MODE_STRETCH, CROP_CENTER, 0, 2000, 1200);
+    spin.rotation = 1;
+    map_of(&spin, 15200, 0, &ox, &oy);
+    expect("rot90 origin x", ox, 0);
+    expect("rot90 origin y", oy, 0);
+    map_of(&spin, 0, 0, &ox, &oy);
+    expect("rot90 other x", ox, 0);
+    expect("rot90 other y", oy, 9120);
+    spin.rotation = 2;
+    map_of(&spin, 15200, 9500, &ox, &oy);
+    expect("rot180 far x", ox, 0);
+    expect("rot180 far y", oy, 0);
+    spin.rotation = 1;
+    spin.has_rect = 1;
+    spin.rect[0] = 0;
+    spin.rect[1] = 0;
+    spin.rect[2] = 9500;
+    spin.rect[3] = 15200;
+    map_of(&spin, 15200, 0, &ox, &oy);
+    expect("rot90 rect still origin x", ox, 0);
+    expect("rot90 rect still origin y", oy, 0);
 
     struct profile rect = display_profile(MODE_STRETCH, CROP_CENTER, 0, 1200, 2000);
     rect.has_rect = 1;
@@ -1109,6 +1256,7 @@ static int kbd_fd = -1;
 static int held_stylus;
 static int held_rubber;
 static long display_ms;
+static int display_inactive_logged;
 
 static int bit_is_set(const unsigned long *bits, int bit) {
     int width = (int)(8 * sizeof(unsigned long));
@@ -1151,8 +1299,10 @@ struct pen {
     int n;
     int seen;
     int idc_on;
+    int direct;
     int xmin, xmax, ymin, ymax, pmin, pmax;
     int last_x, last_y, last_pressure;
+    int last_tilt_x, last_tilt_y;
     char path[64];
     char vname[UINPUT_MAX_NAME_SIZE];
     char idc_path[160];
@@ -1197,7 +1347,7 @@ static int read_text(const char *path, char *buf, int cap) {
 }
 
 static int create_uinput(const char *name, const struct input_id *id, const struct axis_setup *axes,
-                         int naxes, int *ufd_out) {
+                         int naxes, int direct, int *ufd_out) {
     int evbits[] = {EV_KEY, EV_ABS, EV_SYN};
     int keys[] = {BTN_TOOL_PEN, BTN_TOOL_RUBBER, BTN_TOUCH, BTN_STYLUS, BTN_STYLUS2};
     struct uinput_setup setup;
@@ -1209,7 +1359,7 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
     for (int i = 0; i < 3; i++) {
         if (ioctl(ufd, UI_SET_EVBIT, evbits[i]) < 0) goto fail;
     }
-    if (ioctl(ufd, UI_SET_PROPBIT, INPUT_PROP_POINTER) < 0) goto fail;
+    if (ioctl(ufd, UI_SET_PROPBIT, direct ? INPUT_PROP_DIRECT : INPUT_PROP_POINTER) < 0) goto fail;
     for (int i = 0; i < 5; i++) {
         if (ioctl(ufd, UI_SET_KEYBIT, keys[i]) < 0) goto fail;
     }
@@ -1298,7 +1448,7 @@ static int check_mode(void) {
         {ABS_TILT_Y, 1, {.minimum = -90, .maximum = 90, .resolution = 57}},
     };
     int ufd = -1;
-    if (create_uinput("StylusCtrl check", &id, axes, 5, &ufd) < 0) return 1;
+    if (create_uinput("StylusCtrl check", &id, axes, 5, 0, &ufd) < 0) return 1;
     char sysname[64];
     if (uinput_sysname(ufd, sysname, sizeof sysname) < 0) {
         log_errno("UI_GET_SYSNAME");
@@ -1404,13 +1554,13 @@ static const char *mode_word(int mode) {
 static const char *crop_word(int crop) {
     switch (crop) {
     case CROP_LEFT:
-        return "丢掉左边";
+        return "靠左";
     case CROP_RIGHT:
-        return "丢掉右边";
+        return "靠右";
     case CROP_TOP:
-        return "丢掉上边";
+        return "靠上";
     case CROP_BOTTOM:
-        return "丢掉下边";
+        return "靠下";
     default:
         return "居中";
     }
@@ -1428,9 +1578,12 @@ static void log_profile(void) {
         return;
     }
     const char *side = cfg.stylus_action == STYLUS_SHORTCUT ? "快捷键" : "原样";
-    log_msg("配置 %s，%s，侧键%s，橡皮位%s，死区 %.2f", mode_word(cfg.mode), crop_word(cfg.crop), side,
-            rubber_word(cfg.rubber_action), cfg.deadzone);
+    log_msg("配置 %s，%s，侧键%s，橡皮位%s，死区 %.2f–%.2f", mode_word(cfg.mode), crop_word(cfg.crop), side,
+            rubber_word(cfg.rubber_action), cfg.deadzone, cfg.ceiling > cfg.deadzone ? cfg.ceiling : 1.0);
     if (cfg.has_rect) log_msg("板内矩形 %d,%d-%d,%d", cfg.rect[0], cfg.rect[1], cfg.rect[2], cfg.rect[3]);
+    if (cfg.has_screen)
+        log_msg("屏幕矩形 %.3f,%.3f-%.3f,%.3f", cfg.screen[0], cfg.screen[1], cfg.screen[2], cfg.screen[3]);
+    if (cfg.rotation) log_msg("数位板旋转 %d", cfg.rotation * 90);
     if (cfg.has_match) log_msg("只抓 %04x:%04x", cfg.vendor, cfg.product);
     if (cfg.curve_n) log_msg("压感曲线已加载");
 }
@@ -1520,32 +1673,69 @@ static int refresh_display(void) {
     }
     buf[n] = 0;
     pclose(fp);
-    char *start = strstr(buf, "type=INTERNAL");
-    if (!start) {
+    char *best = NULL;
+    int best_active = 0;
+    for (char *p = buf; (p = strstr(p, "type=INTERNAL")) != NULL; p += 13) {
+        char *end = strchr(p, '}');
+        if (!end || end - p > 8000) continue;
+        char saved = *end;
+        *end = 0;
+        int active = strstr(p, "isActive=true") != NULL;
+        *end = saved;
+        if (!best || (active && !best_active)) {
+            best = p;
+            best_active = active;
+        }
+        if (active) break;
+    }
+    if (!best) {
         free(buf);
         log_msg("dumpsys 里没有内屏");
         return -1;
     }
-    char *end = strchr(start, '}');
-    size_t len = end ? (size_t)(end - start) : strlen(start);
+    if (!best_active) {
+        free(buf);
+        if (!display_inactive_logged) {
+            display_inactive_logged = 1;
+            log_msg("屏幕 viewport 不在活动状态，先不改尺寸");
+        }
+        return -1;
+    }
+    display_inactive_logged = 0;
+    char *end = strchr(best, '}');
+    size_t len = end ? (size_t)(end - best) : strlen(best);
     if (len > 8000) len = 8000;
-    char saved = start[len];
-    start[len] = 0;
-    char *o = strstr(start, "orientation=");
-    char *w = strstr(start, "deviceWidth=");
-    char *h = strstr(start, "deviceHeight=");
-    if (!o || !w || !h) {
-        start[len] = saved;
+    char saved = best[len];
+    best[len] = 0;
+    char *o = strstr(best, "orientation=");
+    int dw = 0;
+    int dh = 0;
+    char *frame = strstr(best, "logicalFrame=Rect(");
+    if (frame) {
+        int x0, y0, x1, y1;
+        if (sscanf(frame, "logicalFrame=Rect(%d, %d - %d, %d)", &x0, &y0, &x1, &y1) == 4) {
+            dw = x1 - x0;
+            dh = y1 - y0;
+        }
+    }
+    if (dw <= 0 || dh <= 0) {
+        char *w = strstr(best, "deviceWidth=");
+        char *h = strstr(best, "deviceHeight=");
+        if (w && h) {
+            dw = atoi(w + 12);
+            dh = atoi(h + 13);
+        }
+    }
+    if (!o || dw <= 0 || dh <= 0) {
+        best[len] = saved;
         free(buf);
         log_msg("读不到屏幕方向");
         return -1;
     }
     int ori = atoi(o + 12);
-    int dw = atoi(w + 12);
-    int dh = atoi(h + 13);
-    start[len] = saved;
+    best[len] = saved;
     free(buf);
-    if (dw <= 0 || dh <= 0 || ori < 0 || ori > 3) {
+    if (ori < 0 || ori > 3) {
         log_msg("屏幕尺寸不对");
         return -1;
     }
@@ -1588,7 +1778,7 @@ static void sync_idc(struct pen *pen) {
 static int open_virtual(struct pen *pen) {
     sync_idc(pen);
     int ufd = -1;
-    if (create_uinput(pen->vname, &pen->id, pen->axes, 5, &ufd) < 0) return -1;
+    if (create_uinput(pen->vname, &pen->id, pen->axes, 5, pen->direct, &ufd) < 0) return -1;
     if (pen->ufd >= 0) {
         ioctl(pen->ufd, UI_DEV_DESTROY);
         close(pen->ufd);
@@ -1599,29 +1789,104 @@ static int open_virtual(struct pen *pen) {
     return 0;
 }
 
-static void apply_axes(struct pen *pen, const struct input_event *in, int nin, struct input_event *out, int nout) {
+static void rotate_tilt(int rot, int tx, int ty, int *ox, int *oy) {
+    switch (rot & 3) {
+    case 1:
+        *ox = ty;
+        *oy = -tx;
+        break;
+    case 2:
+        *ox = -tx;
+        *oy = -ty;
+        break;
+    case 3:
+        *ox = -ty;
+        *oy = tx;
+        break;
+    default:
+        *ox = tx;
+        *oy = ty;
+        break;
+    }
+}
+
+static int apply_axes(struct pen *pen, const struct input_event *in, int nin, struct input_event *out, int nout,
+                      int cap) {
     int x = pen->last_x;
     int y = pen->last_y;
     int pressure = pen->last_pressure;
+    int tilt_x = pen->last_tilt_x;
+    int tilt_y = pen->last_tilt_y;
+    int saw_tilt = 0;
     for (int i = 0; i < nin; i++) {
         if (in[i].type != EV_ABS) continue;
         if (in[i].code == ABS_X) x = in[i].value;
         else if (in[i].code == ABS_Y) y = in[i].value;
         else if (in[i].code == ABS_PRESSURE) pressure = in[i].value;
+        else if (in[i].code == ABS_TILT_X) {
+            tilt_x = in[i].value;
+            saw_tilt = 1;
+        } else if (in[i].code == ABS_TILT_Y) {
+            tilt_y = in[i].value;
+            saw_tilt = 1;
+        }
     }
     pen->last_x = x;
     pen->last_y = y;
     pen->last_pressure = pressure;
+    pen->last_tilt_x = tilt_x;
+    pen->last_tilt_y = tilt_y;
     int mx = x;
     int my = y;
-    map_point(&cfg, pen->xmin, pen->xmax, pen->ymin, pen->ymax, x, y, &mx, &my);
+    /* The internal digitizer is already the panel. Keep its coordinates and
+       only reshape pressure and buttons. */
+    if (!pen->direct) map_point(&cfg, pen->xmin, pen->xmax, pen->ymin, pen->ymax, x, y, &mx, &my);
     int mp = pressure_out(&cfg, pressure, pen->pmin, pen->pmax);
+    int mtx = tilt_x;
+    int mty = tilt_y;
+    if (!pen->direct && cfg.rotation) rotate_tilt(cfg.rotation, tilt_x, tilt_y, &mtx, &mty);
+    int have_tx = 0;
+    int have_ty = 0;
     for (int i = 0; i < nout; i++) {
         if (out[i].type != EV_ABS) continue;
         if (out[i].code == ABS_X) out[i].value = mx;
         else if (out[i].code == ABS_Y) out[i].value = my;
         else if (out[i].code == ABS_PRESSURE) out[i].value = mp;
+        else if (out[i].code == ABS_TILT_X) {
+            out[i].value = mtx;
+            have_tx = 1;
+        } else if (out[i].code == ABS_TILT_Y) {
+            out[i].value = mty;
+            have_ty = 1;
+        }
     }
+    if (saw_tilt && !pen->direct && cfg.rotation && (!have_tx || !have_ty)) {
+        int syn = -1;
+        for (int i = 0; i < nout; i++) {
+            if (out[i].type == EV_SYN && out[i].code == SYN_REPORT) syn = i;
+        }
+        if (syn >= 0) {
+            if (!have_tx && nout < cap) {
+                memmove(&out[syn + 1], &out[syn], (size_t)(nout - syn) * sizeof out[0]);
+                out[syn] = out[syn + 1];
+                out[syn].type = EV_ABS;
+                out[syn].code = ABS_TILT_X;
+                out[syn].value = mtx;
+                nout++;
+                syn++;
+                have_tx = 1;
+            }
+            if (!have_ty && nout < cap) {
+                memmove(&out[syn + 1], &out[syn], (size_t)(nout - syn) * sizeof out[0]);
+                out[syn] = out[syn + 1];
+                out[syn].type = EV_ABS;
+                out[syn].code = ABS_TILT_Y;
+                out[syn].value = mty;
+                nout++;
+            }
+        }
+    }
+    return nout;
 }
 
 static void emit_shortcut(const int *keys, int nkeys, int down) {
@@ -1648,25 +1913,17 @@ static void release_held(void) {
     }
 }
 
-static int create_keyboard(void) {
+static int create_keyboard(const int *codes, int ncodes) {
     int ufd = open("/dev/uinput", O_WRONLY | O_CLOEXEC);
     if (ufd < 0) {
         log_errno("打开 /dev/uinput");
         return -1;
     }
     if (ioctl(ufd, UI_SET_EVBIT, EV_KEY) < 0 || ioctl(ufd, UI_SET_EVBIT, EV_SYN) < 0) goto fail;
-    int mods[] = {KEY_LEFTCTRL, KEY_LEFTALT, KEY_LEFTSHIFT, KEY_LEFTMETA};
-    for (int i = 0; i < 4; i++) {
-        if (ioctl(ufd, UI_SET_KEYBIT, mods[i]) < 0) goto fail;
-    }
-    static const int letters[] = {KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
-                                  KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
-                                  KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z};
-    for (int i = 0; i < 26; i++) {
-        if (ioctl(ufd, UI_SET_KEYBIT, letters[i]) < 0) goto fail;
-    }
-    for (int code = KEY_1; code <= KEY_0; code++) {
-        if (ioctl(ufd, UI_SET_KEYBIT, code) < 0) goto fail;
+    /* Only the keys this profile actually chords. A full alphabet is an
+       alphabetic keyboard, and Android then refuses to show the soft keyboard. */
+    for (int i = 0; i < ncodes; i++) {
+        if (ioctl(ufd, UI_SET_KEYBIT, codes[i]) < 0) goto fail;
     }
     struct uinput_setup setup;
     memset(&setup, 0, sizeof setup);
@@ -1685,17 +1942,76 @@ fail:
     return -1;
 }
 
+static int kbd_codes[16];
+static int kbd_ncodes;
+
 static int wants_keyboard(void) {
     return cfg_loaded && (cfg.stylus_action == STYLUS_SHORTCUT || cfg.rubber_action == RUBBER_SHORTCUT);
 }
 
+static int collect_bound_keys(int *out, int cap) {
+    int n = 0;
+    const int *lists[2];
+    int counts[2];
+    int nlists = 0;
+    if (cfg.stylus_action == STYLUS_SHORTCUT && cfg.stylus_nkeys > 0) {
+        lists[nlists] = cfg.stylus_keys;
+        counts[nlists] = cfg.stylus_nkeys;
+        nlists++;
+    }
+    if (cfg.rubber_action == RUBBER_SHORTCUT && cfg.rubber_nkeys > 0) {
+        lists[nlists] = cfg.rubber_keys;
+        counts[nlists] = cfg.rubber_nkeys;
+        nlists++;
+    }
+    for (int i = 0; i < nlists; i++) {
+        for (int k = 0; k < counts[i]; k++) {
+            int code = lists[i][k];
+            int seen = 0;
+            for (int j = 0; j < n; j++) {
+                if (out[j] == code) seen = 1;
+            }
+            if (seen) continue;
+            if (n >= cap) return n;
+            out[n++] = code;
+        }
+    }
+    return n;
+}
+
+static int same_codes(const int *a, int na, const int *b, int nb) {
+    if (na != nb) return 0;
+    for (int i = 0; i < na; i++) {
+        int found = 0;
+        for (int j = 0; j < nb; j++) {
+            if (a[i] == b[j]) found = 1;
+        }
+        if (!found) return 0;
+    }
+    return 1;
+}
+
+static void close_keyboard(void) {
+    if (kbd_fd < 0) return;
+    ioctl(kbd_fd, UI_DEV_DESTROY);
+    close(kbd_fd);
+    kbd_fd = -1;
+    kbd_ncodes = 0;
+}
+
 static void sync_keyboard(void) {
-    if (wants_keyboard()) {
-        if (kbd_fd < 0) create_keyboard();
-    } else if (kbd_fd >= 0) {
-        ioctl(kbd_fd, UI_DEV_DESTROY);
-        close(kbd_fd);
-        kbd_fd = -1;
+    int next[16];
+    int nnext = wants_keyboard() ? collect_bound_keys(next, 16) : 0;
+    if (nnext == 0) {
+        close_keyboard();
+        return;
+    }
+    if (kbd_fd >= 0 && same_codes(kbd_codes, kbd_ncodes, next, nnext)) return;
+    release_held();
+    close_keyboard();
+    if (create_keyboard(next, nnext) == 0) {
+        memcpy(kbd_codes, next, (size_t)nnext * sizeof next[0]);
+        kbd_ncodes = nnext;
     }
 }
 
@@ -1771,7 +2087,7 @@ static void forward_packet(struct pen *pen) {
         log_msg("%s 报告写不下，丢掉这一帧", pen->path);
         return;
     }
-    if (prof) apply_axes(pen, pen->pkt, in_n, out, n);
+    if (prof) n = apply_axes(pen, pen->pkt, in_n, out, n, MAX_PACKET + 4);
     pen->n = 0;
     pen->seen = 1;
     if (pen->ufd < 0) return;
@@ -1868,12 +2184,20 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         close(fd);
         return;
     }
-    unsigned long prop[(INPUT_PROP_MAX / (sizeof(long) * 8)) + 1];
-    memset(prop, 0, sizeof prop);
-    if (ioctl(fd, EVIOCGPROP(sizeof prop), prop) < 0 || !bit_is_set(prop, INPUT_PROP_POINTER) ||
-        bit_is_set(prop, INPUT_PROP_DIRECT)) {
-        close(fd);
-        return;
+    int internal = strcmp(source, "sec_e-pen") == 0;
+    if (internal) {
+        if (!cfg_loaded || !cfg.internal_on) {
+            close(fd);
+            return;
+        }
+    } else {
+        unsigned long prop[(INPUT_PROP_MAX / (sizeof(long) * 8)) + 1];
+        memset(prop, 0, sizeof prop);
+        if (ioctl(fd, EVIOCGPROP(sizeof prop), prop) < 0 || !bit_is_set(prop, INPUT_PROP_POINTER) ||
+            bit_is_set(prop, INPUT_PROP_DIRECT)) {
+            close(fd);
+            return;
+        }
     }
     unsigned long absbits[(ABS_MAX / (sizeof(long) * 8)) + 1];
     memset(absbits, 0, sizeof absbits);
@@ -1906,7 +2230,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         close(fd);
         return;
     }
-    if (cfg_loaded && cfg.has_match && (id.vendor != cfg.vendor || id.product != cfg.product)) {
+    if (!internal && cfg_loaded && cfg.has_match && (id.vendor != cfg.vendor || id.product != cfg.product)) {
         close(fd);
         return;
     }
@@ -1919,6 +2243,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     memset(pen, 0, sizeof *pen);
     pen->fd = fd;
     pen->ufd = -1;
+    pen->direct = internal;
     pen->tool.axes = mask;
     memcpy(pen->axes, axes, sizeof axes);
     pen->id = id;
@@ -1944,7 +2269,8 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     char node[64];
     if (uinput_sysname(pen->ufd, sysname, sizeof sysname) == 0) event_node(sysname, node, sizeof node);
     else snprintf(node, sizeof node, "uinput");
-    log_msg("独占 %s「%s」，虚拟设备 %s，x %d-%d，y %d-%d，pressure %d-%d", path, source, node,
+    log_msg("%s独占 %s「%s」，虚拟设备 %s，x %d-%d，y %d-%d，pressure %d-%d", internal ? "内屏 " : "", path,
+            source, node,
             axes[0].info.minimum, axes[0].info.maximum, axes[1].info.minimum, axes[1].info.maximum,
             axes[2].info.minimum, axes[2].info.maximum);
 }
@@ -1970,20 +2296,32 @@ static void log_waiting(void) {
     else log_msg("等待带 INPUT_PROP_POINTER 和 ABS_PRESSURE 的笔节点");
 }
 
-static void reload_config(struct pen *pens, int npens) {
+static void reload_config(struct pen *pens, int *npens) {
     release_held();
     if (load_config() == 0) {
         sync_keyboard();
         if (need_display()) refresh_display();
-        for (int i = 0; i < npens; i++) {
+        if (!cfg.internal_on) {
+            for (int i = *npens - 1; i >= 0; i--) {
+                if (!pens[i].direct || pens[i].fd < 0) continue;
+                char path[64];
+                snprintf(path, sizeof path, "%s", pens[i].path);
+                close_pen(&pens[i]);
+                log_msg("已放开 %s", path);
+                pens[i] = pens[*npens - 1];
+                (*npens)--;
+            }
+        }
+        for (int i = 0; i < *npens; i++) {
             if (pens[i].fd < 0 || pens[i].idc_on == cfg_loaded) continue;
             if (open_virtual(&pens[i]) == 0) {
                 resync_pen(&pens[i]);
                 log_msg("已按配置重建 %s", pens[i].path);
             }
         }
+        scan(pens, npens);
     }
-    resync_shortcuts(pens, npens);
+    resync_shortcuts(pens, *npens);
 }
 
 static int open_input_watch(void) {
@@ -2034,7 +2372,7 @@ static int run_daemon(void) {
     while (!stop_flag) {
         if (reload_flag) {
             reload_flag = 0;
-            reload_config(pens, npens);
+            reload_config(pens, &npens);
         }
         struct pollfd pfds[MAX_PENS + 1];
         int nfd = 0;
@@ -2081,10 +2419,11 @@ static int run_daemon(void) {
                 saw_watch = 1;
             }
         }
-        if (pr == 0 && npens > 0 && need_display() && now_ms() - display_ms >= 5000) refresh_display();
+        if (pr == 0 && npens > 0 && need_display() && now_ms() - display_ms >= 1000) refresh_display();
         if (pr == 0 || npens == 0 || saw_watch) {
             int before = npens;
             scan(pens, &npens);
+            if (npens > before && need_display()) refresh_display();
             if (npens == 0 && !waiting) {
                 log_waiting();
                 waiting = 1;

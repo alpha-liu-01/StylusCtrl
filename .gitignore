@@ -1,1 +1,5 @@
 out/
+local.properties
+.gradle/
+app/build/
+build/
