@@ -2,4 +2,4 @@
 # Copy this file to <tag>.prop. service.sh tries the full locale tag
 # (zh-CN.prop), then the two-letter language (zh.prop), then en.prop.
 name=StylusCtrl
-description=Area mapping, pressure curve, and side buttons for a drawing tablet. No IDC. The virtual device stays a pointer.
+description=Area mapping, pressure curve, and side buttons for a drawing tablet. A built-in direct pen keeps its own coordinates.

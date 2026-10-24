@@ -1,2 +1,2 @@
 name=StylusCtrl
-description=数位板的区域映射、压感曲线和侧键。不放 IDC，虚拟设备保持指针。
+description=数位板的区域映射、压感曲线和侧键。内屏直连笔保持原来的坐标。

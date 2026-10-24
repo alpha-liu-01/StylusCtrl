@@ -1,6 +1,6 @@
 id=stylusctrl
 name=StylusCtrl
-version=v0.4.5
-versionCode=9
+version=v0.4.6
+versionCode=10
 author=alpha-liu-01
-description=Area mapping, pressure curve, and side buttons for a drawing tablet. No IDC. The virtual device stays a pointer.
+description=Area mapping, pressure curve, and side buttons for a drawing tablet. A built-in direct pen keeps its own coordinates.

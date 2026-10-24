@@ -55,6 +55,8 @@ public class MainActivity extends AppCompatActivity {
     private boolean editingInternal;
     private boolean resumed;
     private boolean devicesBusy;
+    private boolean knowRoot;
+    private boolean haveRoot;
     private String offeredMatch = "";
     private String deviceLine = "";
     private String statusPrefix = "";
@@ -143,6 +145,7 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void run() {
             if (!resumed) return;
+            if (knowRoot && !haveRoot) return;
             if (!devicesBusy) {
                 devicesBusy = true;
                 io.execute(() -> {
@@ -186,13 +189,15 @@ public class MainActivity extends AppCompatActivity {
     private void load() {
         pageSub.setText(R.string.reading_config);
         io.execute(() -> {
-            RootStore.Snapshot snap = RootStore.read();
+            RootStore.Snapshot snap = RootStore.read(MainActivity.this);
             runOnUiThread(() -> applySnapshot(snap));
         });
     }
 
     private void applySnapshot(RootStore.Snapshot snap) {
-        if (!snap.root) {
+        knowRoot = true;
+        haveRoot = snap.root;
+        if (!snap.root && !snap.local) {
             String message = snap.error == null || "no_root".equals(snap.error)
                     ? getString(R.string.no_root) : snap.error;
             pageSub.setText(message);
@@ -209,14 +214,23 @@ public class MainActivity extends AppCompatActivity {
             screenW = snap.screenW;
             screenH = snap.screenH;
         }
+        boolean parsed = true;
         if (snap.configText != null) {
             try {
                 profile = Profile.parse(snap.configText);
             } catch (Exception e) {
+                parsed = false;
                 pageSub.setText(R.string.config_parse_failed);
             }
         }
         showProfile(profile);
+        if (snap.local) {
+            String screen = screenW > 0 ? getString(R.string.screen_size, screenW, screenH) : "";
+            statusPrefix = getString(R.string.local_config);
+            status.setText(statusPrefix + screen);
+            if (parsed) pageSub.setText(R.string.local_config);
+            return;
+        }
         String daemon = snap.daemonPid == null || snap.daemonPid.isEmpty()
                 ? getString(R.string.daemon_stopped)
                 : getString(R.string.daemon_pid, snap.daemonPid);
@@ -595,7 +609,7 @@ public class MainActivity extends AppCompatActivity {
         String json = profile.toJson();
         pageSub.setText(R.string.writing);
         io.execute(() -> {
-            String code = RootStore.write(json);
+            String code = RootStore.write(MainActivity.this, json);
             runOnUiThread(() -> {
                 String message = writeMessage(code);
                 pageSub.setText(message);
@@ -606,6 +620,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private String writeMessage(String code) {
+        if ("local".equals(code)) return getString(R.string.wrote_local);
         if ("notified".equals(code)) return getString(R.string.wrote_notified);
         if ("stopped".equals(code)) return getString(R.string.wrote_stopped);
         if ("written".equals(code)) return getString(R.string.wrote);

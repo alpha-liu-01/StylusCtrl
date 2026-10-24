@@ -5,6 +5,10 @@ import android.util.Base64;
 
 import com.topjohnwu.superuser.Shell;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -25,6 +29,10 @@ public final class RootStore {
         public boolean internal;
         public boolean pointer;
         public boolean direct;
+        public boolean penTool;
+        public boolean pressure;
+        public boolean multitouch;
+        public String bustype = "";
         public int maxX;
         public int maxY;
     }
@@ -36,6 +44,8 @@ public final class RootStore {
         public String devices;
         public String display;
         public String error;
+        /** Settings live in the app directory. The system daemon reads that file. */
+        public boolean local;
         public int tabletMaxX;
         public int tabletMaxY;
         public int screenW;
@@ -43,13 +53,13 @@ public final class RootStore {
         public final List<Pen> pens = new ArrayList<>();
     }
 
-    public static Snapshot read() {
+    public static Snapshot read(Context context) {
         Snapshot snap = new Snapshot();
         try {
-            Shell.Result id = Shell.cmd("id -u").exec();
-            snap.root = id.isSuccess() && !id.getOut().isEmpty() && "0".equals(id.getOut().get(0).trim());
+            snap.root = isRoot();
             if (!snap.root) {
-                snap.error = id.getErr().isEmpty() ? "no_root" : join(id.getErr());
+                snap.local = true;
+                snap.configText = readLocal(context);
                 return snap;
             }
             Shell.Result cfg = Shell.cmd("base64 " + CONFIG_PATH).exec();
@@ -96,8 +106,9 @@ public final class RootStore {
         }
     }
 
-    public static String write(String json) {
+    public static String write(Context context, String json) {
         try {
+            if (!isRoot()) return writeLocal(context, json);
             String b64 = Base64.encodeToString(json.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
             Shell.Result result = Shell.cmd(
                     "mkdir -p /data/adb/stylusctrl",
@@ -116,13 +127,52 @@ public final class RootStore {
         }
     }
 
+    private static boolean isRoot() {
+        Shell.Result id = Shell.cmd("id -u").exec();
+        return id.isSuccess() && !id.getOut().isEmpty() && "0".equals(id.getOut().get(0).trim());
+    }
+
+    private static File localConfig(Context context) {
+        return new File(context.getFilesDir(), "config.json");
+    }
+
+    private static String readLocal(Context context) throws IOException {
+        File file = localConfig(context);
+        if (!file.isFile()) return null;
+        byte[] raw = new byte[(int) file.length()];
+        try (FileInputStream in = new FileInputStream(file)) {
+            int off = 0;
+            while (off < raw.length) {
+                int n = in.read(raw, off, raw.length - off);
+                if (n < 0) break;
+                off += n;
+            }
+        }
+        return new String(raw, StandardCharsets.UTF_8);
+    }
+
+    /** Atomic enough for one settings file. The daemon watches the mtime of config.json. */
+    private static String writeLocal(Context context, String json) throws IOException {
+        File dir = context.getFilesDir();
+        File out = new File(dir, "config.json");
+        File tmp = new File(dir, "config.json.tmp");
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            fos.write(json.getBytes(StandardCharsets.UTF_8));
+            fos.getFD().sync();
+        }
+        if (out.exists() && !out.delete()) return "failed";
+        if (!tmp.renameTo(out)) return "failed";
+        return "local";
+    }
+
     private static final String DEVICE_CMD =
             "getevent -p; echo '##IDS##'; "
                     + "for ev in /sys/class/input/event*; do "
                     + "name=$(cat \"$ev/device/name\" 2>/dev/null | tr '\\n' ' '); "
                     + "vendor=$(cat \"$ev/device/id/vendor\" 2>/dev/null | tr -d '\\n'); "
                     + "product=$(cat \"$ev/device/id/product\" 2>/dev/null | tr -d '\\n'); "
-                    + "printf '%s\\t%s\\t%s\\n' \"$name\" \"$vendor\" \"$product\"; "
+                    + "bustype=$(cat \"$ev/device/id/bustype\" 2>/dev/null | tr -d '\\n'); "
+                    + "printf '%s\\t%s\\t%s\\t%s\\n' \"$name\" \"$vendor\" \"$product\" \"$bustype\"; "
                     + "done";
 
     private static void applyDeviceDump(Snapshot snap, String dump) {
@@ -137,6 +187,7 @@ public final class RootStore {
         snap.devices = events.trim();
         snap.pens.addAll(parseGetevent(snap.devices));
         attachIds(snap.pens, ids);
+        for (Pen pen : snap.pens) classify(pen);
         for (Pen pen : snap.pens) {
             if (!pen.external) continue;
             snap.tabletMaxX = pen.maxX;
@@ -181,14 +232,35 @@ public final class RootStore {
                 if (max > 0) cur.maxY = max;
             } else if (axisCode(trimmed) == 0x18) {
                 sawPressure = true;
+                cur.pressure = true;
+            } else if (trimmed.contains("BTN_DIGI") || trimmed.contains("BTN_TOOL_PEN")) {
+                cur.penTool = true;
+            } else if (trimmed.contains("ABS_MT_SLOT") || trimmed.contains("ABS_MT_POSITION_X")) {
+                cur.multitouch = true;
             } else if (trimmed.endsWith(":") && !trimmed.startsWith("ABS")) {
                 inProps = false;
             }
-            cur.external = cur.pointer && !cur.direct && sawPressure && cur.maxX > 0 && cur.maxY > 0
-                    && !cur.name.startsWith("StylusCtrl") && !"sec_e-pen".equals(cur.name);
-            cur.internal = "sec_e-pen".equals(cur.name);
+            cur.pressure = sawPressure;
         }
         return out;
+    }
+
+    /** Same rule as stylusctld is_builtin_pen. An empty bus falls back to the i2c-hid name. */
+    static void classify(Pen pen) {
+        boolean builtin = false;
+        if (!pen.name.startsWith("StylusCtrl")) {
+            if ("sec_e-pen".equals(pen.name)) {
+                builtin = true;
+            } else if (pen.direct && pen.penTool && pen.pressure && !pen.multitouch && pen.maxX > 0 && pen.maxY > 0) {
+                String bus = pen.bustype == null ? "" : pen.bustype.trim().toLowerCase(Locale.US);
+                if (bus.startsWith("0x")) bus = bus.substring(2);
+                if (bus.isEmpty()) builtin = pen.name.startsWith("hid-over-i2c ");
+                else builtin = "18".equals(bus) || "0018".equals(bus);
+            }
+        }
+        pen.internal = builtin;
+        pen.external = pen.pointer && !pen.direct && pen.pressure && pen.maxX > 0 && pen.maxY > 0
+                && !pen.name.startsWith("StylusCtrl") && !builtin;
     }
 
     private static void attachIds(List<Pen> pens, String table) {
@@ -208,6 +280,7 @@ public final class RootStore {
                 used[i] = true;
                 pen.vendor = hex4(rows.get(i)[1]);
                 pen.product = hex4(rows.get(i)[2]);
+                if (rows.get(i).length >= 4) pen.bustype = rows.get(i)[3].trim();
                 break;
             }
         }

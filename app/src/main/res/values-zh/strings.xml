@@ -32,8 +32,8 @@
     <string name="pressure_graph">横轴是手的压力，纵轴是送给系统的压力。最左节点的横位置是低位死区，低于它保持起点的输出。最右节点是高位死区，高于它顶到终点。</string>
 
     <string name="internal_body">内屏笔不做区域映射。压感和快捷键在那两页里选「内屏笔」，和外接板子各存一份。这里只决定要不要抓取内屏笔。</string>
-    <string name="internal_switch">抓取内屏笔 sec_e-pen</string>
-    <string name="internal_detail">打开之后独占 sec_e-pen，坐标原样送出，只改这一份压感和侧键。笔槽、皮套、悬停距离和原来的 Home 键会原样送回。需要已经刷入这一版模块。</string>
+    <string name="internal_switch">抓取内屏笔</string>
+    <string name="internal_detail">打开之后独占内屏笔，坐标原样送出，只改这一份压感和侧键。三星笔上的笔槽、皮套、悬停距离和 Home 键会原样送回。</string>
 
     <string name="preset_stretch">拉伸铺满</string>
     <string name="preset_center">等比居中</string>
@@ -48,8 +48,9 @@
     <string name="device_loading">正在读取…</string>
     <string name="test_hint">在下面画一笔。这里不跟页面滚动抢触控。</string>
 
-    <string name="reading_config">正在向 root 读取配置…</string>
+    <string name="reading_config">正在读取配置…</string>
     <string name="no_root">没有 root。Magisk 需要允许这个应用。</string>
+    <string name="local_config">没有 root。设置写在应用目录里，系统里的守护进程读这份文件。</string>
     <string name="config_parse_failed">配置解析失败，界面用默认值</string>
     <string name="daemon_stopped">守护进程没在跑。保存会写配置，刷上模块并重启后才生效。</string>
     <string name="daemon_pid">守护进程 pid %1$s</string>
@@ -69,6 +70,7 @@
     <string name="writing">正在写入…</string>
     <string name="wrote_notified">已写入，守护进程会重读</string>
     <string name="wrote_stopped">已写入。守护进程没在跑，装上模块并重启后才会生效</string>
+    <string name="wrote_local">已保存。系统里的守护进程大约一秒内会重读应用目录里的这份配置。</string>
     <string name="wrote">已写入</string>
     <string name="write_failed">写入失败</string>
     <string name="no_input_devices">没有读到输入设备</string>

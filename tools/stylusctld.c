@@ -32,6 +32,23 @@
 #ifndef SW_MACHINE_COVER
 #define SW_MACHINE_COVER 0x10
 #endif
+#ifndef BUS_I2C
+#define BUS_I2C 0x18
+#endif
+
+/* sec_e-pen is Samsung's digitizer. Any other built-in pen is an I2C node
+   with INPUT_PROP_DIRECT, a pen tool, and no multitouch slot. Scarlet's
+   node is "hid-over-i2c 2D1F:0036 Stylus". The sibling without DIRECT is
+   not a pen. A finger screen is DIRECT too, but it has ABS_MT_SLOT.
+   A USB tablet that reports DIRECT is left alone: area mapping for that
+   case is not the internal path. */
+static int is_builtin_pen(const char *name, int direct, int pen_tool, int multitouch, unsigned bustype) {
+    if (!name || !strncmp(name, "StylusCtrl", 10)) return 0;
+    if (!strcmp(name, "sec_e-pen")) return 1;
+    if (!direct || !pen_tool || multitouch) return 0;
+    return bustype == BUS_I2C;
+}
+
 /* sec_e-pen reports this key. The header on the build machine has no name for it. */
 #define KEY_SEC_EPEN_EXTRA 0x00fd
 
@@ -1667,6 +1684,15 @@ static void test_internal_feel(void) {
     expect("span ignored", parse_config("{\"mapping\":{\"span\":[100,200]}}", &p), 0);
 }
 
+static void test_builtin_pen(void) {
+    expect("samsung name", is_builtin_pen("sec_e-pen", 0, 0, 0, 0), 1);
+    expect("scarlet", is_builtin_pen("hid-over-i2c 2D1F:0036 Stylus", 1, 1, 0, BUS_I2C), 1);
+    expect("scarlet sibling", is_builtin_pen("hid-over-i2c 2D1F:0036", 0, 1, 0, BUS_I2C), 0);
+    expect("finger screen", is_builtin_pen("Elan Touchscreen", 1, 0, 1, BUS_I2C), 0);
+    expect("own virtual", is_builtin_pen("StylusCtrl hid-over-i2c 2D1F:0036 Stylus", 1, 1, 0, BUS_I2C), 0);
+    expect("usb direct", is_builtin_pen("Wacom Tablet", 1, 1, 0, BUS_USB), 0);
+}
+
 static void test_relay_dock(void) {
     struct tool_state st = {.axes = AXIS_ALL, .relay = 1};
     struct input_event sw;
@@ -1699,6 +1725,7 @@ int main(void) {
     test_button_actions();
     test_internal_feel();
     test_relay_dock();
+    test_builtin_pen();
     if (failures) {
         fprintf(stderr, "%d failed\n", failures);
         return 1;
@@ -1715,6 +1742,11 @@ static int verbose;
 static struct profile cfg;
 static int cfg_loaded;
 static char config_path[256];
+static time_t config_sec;
+static long config_nsec;
+static long config_check_ms;
+/* No Magisk: the settings app writes here as its own uid. User 0 only. */
+static const char APP_CONFIG[] = "/data/user/0/app.stylusctrl/files/config.json";
 static int kbd_fd = -1;
 static int held_stylus;
 static int held_rubber;
@@ -1816,7 +1848,7 @@ static int read_text(const char *path, char *buf, int cap) {
 }
 
 static int create_uinput(const char *name, const struct input_id *id, const struct axis_setup *axes,
-                         int naxes, int direct, int *ufd_out) {
+                         int naxes, int direct, int relay, int *ufd_out) {
     int evbits[] = {EV_KEY, EV_ABS, EV_SYN};
     int keys[] = {BTN_TOOL_PEN, BTN_TOOL_RUBBER, BTN_TOUCH, BTN_STYLUS, BTN_STYLUS2};
     struct uinput_setup setup;
@@ -1833,8 +1865,9 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
         if (ioctl(ufd, UI_SET_KEYBIT, keys[i]) < 0) goto fail;
     }
     /* Grabbing sec_e-pen swallows the dock, the cover, and hover distance.
-       Put those back on the virtual device unchanged. */
-    if (direct) {
+       Put those back on the virtual device unchanged. Other direct pens,
+       such as Scarlet's i2c stylus, do not carry those events. */
+    if (relay) {
         if (ioctl(ufd, UI_SET_EVBIT, EV_SW) < 0) goto fail;
         if (ioctl(ufd, UI_SET_KEYBIT, KEY_HOMEPAGE) < 0) goto fail;
         if (ioctl(ufd, UI_SET_KEYBIT, KEY_SEC_EPEN_EXTRA) < 0) goto fail;
@@ -1926,7 +1959,7 @@ static int check_mode(void) {
         {ABS_TILT_Y, 1, {.minimum = -90, .maximum = 90, .resolution = 57}},
     };
     int ufd = -1;
-    if (create_uinput("StylusCtrl check", &id, axes, 5, 0, &ufd) < 0) return 1;
+    if (create_uinput("StylusCtrl check", &id, axes, 5, 0, 0, &ufd) < 0) return 1;
     char sysname[64];
     if (uinput_sysname(ufd, sysname, sizeof sysname) < 0) {
         log_errno("UI_GET_SYSNAME");
@@ -2111,6 +2144,23 @@ static char *read_file(const char *path, int *missing) {
     return buf;
 }
 
+static void remember_config_time(void) {
+    struct stat st;
+    if (stat(config_path, &st) == 0) {
+        config_sec = st.st_mtim.tv_sec;
+        config_nsec = st.st_mtim.tv_nsec;
+    } else {
+        config_sec = 0;
+        config_nsec = 0;
+    }
+}
+
+static int config_time_changed(void) {
+    struct stat st;
+    if (stat(config_path, &st) != 0) return config_sec != 0 || config_nsec != 0;
+    return st.st_mtim.tv_sec != config_sec || st.st_mtim.tv_nsec != config_nsec;
+}
+
 static int load_config(void) {
     int missing = 0;
     char *text = read_file(config_path, &missing);
@@ -2272,7 +2322,7 @@ static void sync_idc(struct pen *pen) {
 static int open_virtual(struct pen *pen) {
     sync_idc(pen);
     int ufd = -1;
-    if (create_uinput(pen->vname, &pen->id, pen->axes, 6, pen->direct, &ufd) < 0) return -1;
+    if (create_uinput(pen->vname, &pen->id, pen->axes, 6, pen->direct, pen->tool.relay, &ufd) < 0) return -1;
     if (pen->ufd >= 0) {
         ioctl(pen->ufd, UI_DEV_DESTROY);
         close(pen->ufd);
@@ -2826,26 +2876,33 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         close(fd);
         return;
     }
-    int internal = strcmp(source, "sec_e-pen") == 0;
-    if (internal) {
+    unsigned long prop[(INPUT_PROP_MAX / (sizeof(long) * 8)) + 1];
+    unsigned long keybits[(KEY_MAX / (sizeof(long) * 8)) + 1];
+    unsigned long absbits[(ABS_MAX / (sizeof(long) * 8)) + 1];
+    memset(prop, 0, sizeof prop);
+    memset(keybits, 0, sizeof keybits);
+    memset(absbits, 0, sizeof absbits);
+    struct input_id id;
+    memset(&id, 0, sizeof id);
+    if (ioctl(fd, EVIOCGPROP(sizeof prop), prop) < 0 ||
+        ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keybits), keybits) < 0 ||
+        ioctl(fd, EVIOCGBIT(EV_ABS, sizeof absbits), absbits) < 0 || ioctl(fd, EVIOCGID, &id) < 0) {
+        close(fd);
+        return;
+    }
+    int samsung = strcmp(source, "sec_e-pen") == 0;
+    int builtin = is_builtin_pen(source, bit_is_set(prop, INPUT_PROP_DIRECT), bit_is_set(keybits, BTN_TOOL_PEN),
+                                 bit_is_set(absbits, ABS_MT_SLOT), id.bustype);
+    if (builtin) {
         if (!cfg_loaded || !cfg.internal_on) {
             close(fd);
             return;
         }
-    } else {
-        unsigned long prop[(INPUT_PROP_MAX / (sizeof(long) * 8)) + 1];
-        memset(prop, 0, sizeof prop);
-        if (ioctl(fd, EVIOCGPROP(sizeof prop), prop) < 0 || !bit_is_set(prop, INPUT_PROP_POINTER) ||
-            bit_is_set(prop, INPUT_PROP_DIRECT)) {
-            close(fd);
-            return;
-        }
+    } else if (!bit_is_set(prop, INPUT_PROP_POINTER) || bit_is_set(prop, INPUT_PROP_DIRECT)) {
+        close(fd);
+        return;
     }
-    unsigned long absbits[(ABS_MAX / (sizeof(long) * 8)) + 1];
-    memset(absbits, 0, sizeof absbits);
-    if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof absbits), absbits) < 0 ||
-        !bit_is_set(absbits, ABS_X) || !bit_is_set(absbits, ABS_Y) ||
-        !bit_is_set(absbits, ABS_PRESSURE)) {
+    if (!bit_is_set(absbits, ABS_X) || !bit_is_set(absbits, ABS_Y) || !bit_is_set(absbits, ABS_PRESSURE)) {
         close(fd);
         return;
     }
@@ -2855,7 +2912,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     memset(axes, 0, sizeof axes);
     unsigned mask = 0;
     for (int i = 0; i < 6; i++) {
-        if (codes[i] == ABS_DISTANCE && !internal) continue;
+        if (codes[i] == ABS_DISTANCE && !builtin) continue;
         axes[i].code = codes[i];
         if (!bit_is_set(absbits, codes[i])) continue;
         if (ioctl(fd, EVIOCGABS(codes[i]), &axes[i].info) < 0) {
@@ -2866,14 +2923,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         axes[i].present = 1;
         mask |= axis_bit(codes[i]);
     }
-    struct input_id id;
-    memset(&id, 0, sizeof id);
-    if (ioctl(fd, EVIOCGID, &id) < 0) {
-        log_errno(path);
-        close(fd);
-        return;
-    }
-    if (!internal && cfg_loaded && cfg.has_match && (id.vendor != cfg.vendor || id.product != cfg.product)) {
+    if (!builtin && cfg_loaded && cfg.has_match && (id.vendor != cfg.vendor || id.product != cfg.product)) {
         close(fd);
         return;
     }
@@ -2887,8 +2937,8 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     pen->fd = fd;
     pen->hid_fd = -1;
     pen->ufd = -1;
-    pen->direct = internal;
-    pen->tool.relay = internal;
+    pen->direct = builtin;
+    pen->tool.relay = samsung;
     pen->tool.axes = mask;
     memcpy(pen->axes, axes, sizeof axes);
     pen->id = id;
@@ -2910,12 +2960,12 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         return;
     }
     (*npens)++;
-    if (!internal) open_pen_hidraw(pen);
+    if (!builtin) open_pen_hidraw(pen);
     char sysname[64];
     char node[64];
     if (uinput_sysname(pen->ufd, sysname, sizeof sysname) == 0) event_node(sysname, node, sizeof node);
     else snprintf(node, sizeof node, "uinput");
-    log_msg("%s独占 %s「%s」，虚拟设备 %s，x %d-%d，y %d-%d，pressure %d-%d", internal ? "内屏 " : "", path,
+    log_msg("%s独占 %s「%s」，虚拟设备 %s，x %d-%d，y %d-%d，pressure %d-%d", builtin ? "内屏 " : "", path,
             source, node,
             axes[0].info.minimum, axes[0].info.maximum, axes[1].info.minimum, axes[1].info.maximum,
             axes[2].info.minimum, axes[2].info.maximum);
@@ -3003,6 +3053,7 @@ static int run_daemon(void) {
 
     profile_reset(&cfg);
     load_config();
+    remember_config_time();
     sync_keyboard();
 
     struct pen pens[MAX_PENS];
@@ -3086,6 +3137,14 @@ static int run_daemon(void) {
             }
         }
         if (pr == 0 && npens > 0 && need_display() && now_ms() - display_ms >= 1000) refresh_display();
+        if (now_ms() - config_check_ms >= 1000) {
+            config_check_ms = now_ms();
+            if (config_time_changed()) {
+                log_msg("配置文件有变化");
+                reload_config(pens, &npens);
+                remember_config_time();
+            }
+        }
         if (pr == 0 || npens == 0 || saw_watch) {
             int before = npens;
             scan(pens, &npens);
@@ -3139,8 +3198,10 @@ int main(int argc, char **argv) {
         }
     } else if (access("/data/adb/stylusctrl/config.json", R_OK) == 0) {
         snprintf(config_path, sizeof config_path, "/data/adb/stylusctrl/config.json");
-    } else {
+    } else if (access("/data/local/tmp/stylusctrl.json", R_OK) == 0) {
         snprintf(config_path, sizeof config_path, "/data/local/tmp/stylusctrl.json");
+    } else {
+        snprintf(config_path, sizeof config_path, "%s", APP_CONFIG);
     }
     return run_daemon();
 }

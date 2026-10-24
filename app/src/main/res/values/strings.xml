@@ -35,8 +35,8 @@
     <string name="pressure_graph">Horizontal is how hard you press. Vertical is the pressure sent to the system. The left node\'s horizontal position is the low deadzone: below it, output stays at the start. The right node is the high deadzone: above it, output pins to the end.</string>
 
     <string name="internal_body">The internal pen has no area mapping. Choose Internal pen on the pressure and button pages; that profile is stored separately from the external tablet. This page only decides whether to grab the internal pen.</string>
-    <string name="internal_switch">Grab the internal pen sec_e-pen</string>
-    <string name="internal_detail">After it is on, sec_e-pen is grabbed. Coordinates pass through, and only this profile\'s pressure and side buttons change. The dock, cover, hover distance, and the original Home key are forwarded unchanged. This version of the module has to be installed.</string>
+    <string name="internal_switch">Grab the internal pen</string>
+    <string name="internal_detail">After it is on, the built-in pen is grabbed. Coordinates pass through, and only this profile\'s pressure and side buttons change. On the Samsung pen, the dock, cover, hover distance, and the original Home key are forwarded unchanged.</string>
 
     <string name="preset_stretch">Stretch to fill</string>
     <string name="preset_center">Fit, centered</string>
@@ -54,8 +54,9 @@
     <string name="device_loading">Reading…</string>
     <string name="test_hint">Draw a stroke below. This page does not fight scrolling for the touch.</string>
 
-    <string name="reading_config">Reading the configuration from root…</string>
+    <string name="reading_config">Reading the configuration…</string>
     <string name="no_root">No root. Magisk needs to allow this app.</string>
+    <string name="local_config">No root. Settings stay in the app directory, and the system daemon reads that file.</string>
     <string name="config_parse_failed">The configuration could not be parsed. The screen is using defaults.</string>
     <string name="daemon_stopped">The daemon is not running. Saving writes the configuration. It takes effect after the module is installed and the device reboots.</string>
     <string name="daemon_pid">Daemon pid %1$s</string>
@@ -75,6 +76,7 @@
     <string name="writing">Writing…</string>
     <string name="wrote_notified">Saved. The daemon will reread it.</string>
     <string name="wrote_stopped">Saved. The daemon is not running. It takes effect after the module is installed and the device reboots.</string>
+    <string name="wrote_local">Saved. The system daemon rereads the app file within a second.</string>
     <string name="wrote">Saved.</string>
     <string name="write_failed">Write failed.</string>
     <string name="no_input_devices">No input devices were read</string>
