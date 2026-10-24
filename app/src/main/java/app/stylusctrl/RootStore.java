@@ -42,6 +42,11 @@ public final class RootStore {
         public String bustype = "";
         public int maxX;
         public int maxY;
+        /** Axis exists. The numeric max is not taken from MotionRange. */
+        public boolean ranged;
+        /** This name was published by the daemon and carries the raw axis limits. */
+        public boolean daemon;
+        public String sourceName = "";
     }
 
     public static final class Snapshot {
@@ -276,7 +281,7 @@ public final class RootStore {
         if (!pen.name.startsWith("StylusCtrl")) {
             if ("sec_e-pen".equals(pen.name)) {
                 builtin = true;
-            } else if (pen.direct && pen.penTool && pen.pressure && !pen.multitouch && pen.maxX > 0 && pen.maxY > 0) {
+            } else if (pen.direct && pen.penTool && pen.pressure && !pen.multitouch && penHasAxes(pen)) {
                 String bus = pen.bustype == null ? "" : pen.bustype.trim().toLowerCase(Locale.US);
                 if (bus.startsWith("0x")) bus = bus.substring(2);
                 if (bus.isEmpty()) builtin = pen.name.startsWith("hid-over-i2c ");
@@ -284,8 +289,12 @@ public final class RootStore {
             }
         }
         pen.internal = builtin;
-        pen.external = pen.pointer && !pen.direct && pen.pressure && pen.maxX > 0 && pen.maxY > 0
+        pen.external = pen.pointer && !pen.direct && pen.pressure && penHasAxes(pen)
                 && !pen.name.startsWith("StylusCtrl") && !builtin;
+    }
+
+    private static boolean penHasAxes(Pen pen) {
+        return pen.ranged || (pen.maxX > 0 && pen.maxY > 0);
     }
 
     private static void attachIds(List<Pen> pens, String table) {
@@ -359,7 +368,7 @@ public final class RootStore {
         snap.screenH = screen.height;
     }
 
-    /** Same fields classify() already uses. Names starting with StylusCtrl are left for that filter. */
+    /** Plug, name, and ids come from InputManager. Raw limits come from the daemon's virtual device name. */
     private static void readInputDevices(Context context, Snapshot snap) {
         InputManager manager = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
         if (manager == null) return;
@@ -370,6 +379,14 @@ public final class RootStore {
             pen.name = dev.getName() == null ? "" : dev.getName();
             pen.vendor = String.format(Locale.US, "%04x", dev.getVendorId() & 0xffff);
             pen.product = String.format(Locale.US, "%04x", dev.getProductId() & 0xffff);
+            int[] raw = daemonAxes(pen.name);
+            if (raw != null) {
+                pen.daemon = true;
+                pen.maxX = raw[1];
+                pen.maxY = raw[3];
+                pen.sourceName = daemonTail(pen.name);
+                if (!pen.sourceName.isEmpty()) pen.name = "StylusCtrl " + pen.sourceName;
+            }
             int sources = dev.getSources();
             boolean touch = (sources & InputDevice.SOURCE_TOUCHSCREEN) != 0;
             boolean stylus = (sources & InputDevice.SOURCE_STYLUS) != 0;
@@ -380,17 +397,60 @@ public final class RootStore {
             InputDevice.MotionRange x = dev.getMotionRange(MotionEvent.AXIS_X);
             InputDevice.MotionRange y = dev.getMotionRange(MotionEvent.AXIS_Y);
             InputDevice.MotionRange pressure = dev.getMotionRange(MotionEvent.AXIS_PRESSURE);
-            if (x != null && x.getMax() > 0) pen.maxX = (int) x.getMax();
-            if (y != null && y.getMax() > 0) pen.maxY = (int) y.getMax();
+            pen.ranged = x != null && y != null;
             pen.pressure = pressure != null && pressure.getMax() > 0;
             boolean externalDevice = Build.VERSION.SDK_INT >= 29 && dev.isExternal();
-            if (externalDevice && pen.pressure && pen.maxX > 0 && pen.maxY > 0 && !pen.name.startsWith("StylusCtrl")) {
+            if (externalDevice && pen.pressure && pen.ranged && !pen.name.startsWith("StylusCtrl")) {
                 pen.pointer = true;
                 pen.direct = false;
             }
             snap.pens.add(pen);
         }
+        attachDaemonAxes(snap.pens);
         for (Pen pen : snap.pens) classify(pen);
+    }
+
+    /** StylusCtrl xmin xmax ymin ymax, then the kernel name. Null when this is not that form. */
+    static int[] daemonAxes(String name) {
+        if (name == null || !name.startsWith("StylusCtrl ")) return null;
+        String[] parts = name.split(" ", 6);
+        if (parts.length < 5) return null;
+        try {
+            return new int[] {
+                    Integer.parseInt(parts[1]),
+                    Integer.parseInt(parts[2]),
+                    Integer.parseInt(parts[3]),
+                    Integer.parseInt(parts[4])
+            };
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static String daemonTail(String name) {
+        String[] parts = name.split(" ", 6);
+        return parts.length >= 6 ? parts[5] : "";
+    }
+
+    private static void attachDaemonAxes(List<Pen> pens) {
+        for (Pen pen : pens) {
+            if (pen.daemon || pen.name.startsWith("StylusCtrl")) continue;
+            for (Pen src : pens) {
+                if (!src.daemon || !sameTablet(pen, src)) continue;
+                pen.maxX = src.maxX;
+                pen.maxY = src.maxY;
+                break;
+            }
+        }
+    }
+
+    private static boolean sameTablet(Pen physical, Pen reported) {
+        if (reported.vendor.length() == 4 && !"0000".equals(reported.vendor)
+                && reported.vendor.equals(physical.vendor) && reported.product.equals(physical.product)) {
+            return true;
+        }
+        String tail = reported.sourceName == null ? "" : reported.sourceName;
+        return !tail.isEmpty() && (physical.name.equals(tail) || physical.name.startsWith(tail + " "));
     }
 
     public static String axesSummary(Context context, List<Pen> pens) {

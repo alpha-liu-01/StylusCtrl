@@ -1241,6 +1241,14 @@ static int parse_invert_map(const unsigned char *desc, int len, struct invert_ma
     return out->invert_bit < 0 ? -1 : 0;
 }
 
+/* xmin xmax ymin ymax, then the kernel name. The app reads this back from
+   InputDevice.getName and does not use the scaled MotionRange. */
+static void format_vname(char *out, int cap, int xmin, int xmax, int ymin, int ymax, const char *source) {
+    if (!source) source = "";
+    int n = snprintf(out, (size_t)cap, "StylusCtrl %d %d %d %d %s", xmin, xmax, ymin, ymax, source);
+    if (n < 0 || n >= cap) snprintf(out, (size_t)cap, "StylusCtrl %d %d %d %d", xmin, xmax, ymin, ymax);
+}
+
 /* Rising edge of Invert while the pen stays in range. Leaving range clears it
    so the next entry can click again, without counting the exit itself. */
 static int invert_rise(int *down, int in_range, int invert) {
@@ -1717,6 +1725,14 @@ static void test_display_config(void) {
     expect("mode stretch", kept.mode, MODE_STRETCH);
 }
 
+static void test_vname(void) {
+    char name[80];
+    format_vname(name, 80, 0, 15200, 0, 9500, "Wacom Co.,Ltd. Wacom One pen tablet small");
+    expect("vname axes", strncmp(name, "StylusCtrl 0 15200 0 9500 ", 26) == 0, 1);
+    expect("vname fits", (int)strlen(name) < 80, 1);
+    expect("vname tail", strcmp(name + 26, "Wacom Co.,Ltd. Wacom One pen tablet small") == 0, 1);
+}
+
 static void test_builtin_pen(void) {
     expect("samsung name", is_builtin_pen("sec_e-pen", 0, 0, 0, 0), 1);
     expect("scarlet", is_builtin_pen("hid-over-i2c 2D1F:0036 Stylus", 1, 1, 0, BUS_I2C), 1);
@@ -1759,6 +1775,7 @@ int main(void) {
     test_internal_feel();
     test_relay_dock();
     test_display_config();
+    test_vname();
     test_builtin_pen();
     if (failures) {
         fprintf(stderr, "%d failed\n", failures);
@@ -2771,16 +2788,24 @@ static int open_pen_hidraw(struct pen *pen) {
         log_msg("open %s failed: %s", dev, strerror(errno));
         return -1;
     }
+    int desc_len = 0;
+    if (ioctl(fd, HIDIOCGRDESCSIZE, &desc_len) < 0 || desc_len <= 0) {
+        log_msg("%s report descriptor unreadable: %s", dev, strerror(errno));
+        close(fd);
+        return -1;
+    }
+    /* 6.6 hidraw rejects HIDIOCGRDESC when len > HID_MAX_DESCRIPTOR_SIZE - 1. */
+    if (desc_len > HID_MAX_DESCRIPTOR_SIZE - 1) desc_len = HID_MAX_DESCRIPTOR_SIZE - 1;
     struct hidraw_report_descriptor rdesc;
     memset(&rdesc, 0, sizeof rdesc);
-    rdesc.size = HID_MAX_DESCRIPTOR_SIZE;
-    if (ioctl(fd, HIDIOCGRDESC, &rdesc) < 0 || rdesc.size == 0 || rdesc.size > HID_MAX_DESCRIPTOR_SIZE) {
+    rdesc.size = (__u32)desc_len;
+    if (ioctl(fd, HIDIOCGRDESC, &rdesc) < 0) {
         log_msg("%s report descriptor unreadable: %s", dev, strerror(errno));
         close(fd);
         return -1;
     }
     struct invert_map map;
-    if (parse_invert_map(rdesc.value, (int)rdesc.size, &map) != 0) {
+    if (parse_invert_map(rdesc.value, desc_len, &map) != 0) {
         log_msg("%s descriptor has no Invert usage", dev);
         close(fd);
         return -1;
@@ -2885,7 +2910,9 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     pen->last_y = pen->ymin;
     pen->last_pressure = pen->pmin;
     snprintf(pen->path, sizeof pen->path, "%s", path);
-    snprintf(pen->vname, sizeof pen->vname, "StylusCtrl %.*s", (int)sizeof pen->vname - 12, source);
+    /* The app has no raw-axis ioctl. The four numbers are xmin xmax ymin ymax.
+       InputManager skips this name as a pen and copies the range onto the real one. */
+    format_vname(pen->vname, (int)sizeof pen->vname, pen->xmin, pen->xmax, pen->ymin, pen->ymax, source);
     if (open_virtual(pen) < 0) {
         ioctl(fd, EVIOCGRAB, 0);
         close(fd);

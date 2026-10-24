@@ -59,6 +59,9 @@ public class MainActivity extends AppCompatActivity {
     private boolean haveRoot;
     private String offeredMatch = "";
     private String deviceLine = "";
+    /** When the external pen last disappeared. Re-enumeration drops it for about 3 seconds. */
+    private long externalGoneAt = -1;
+    private static final long EXTERNAL_GAP_MS = 4000;
     private String statusPrefix = "";
 
     @Override
@@ -253,14 +256,34 @@ public class MainActivity extends AppCompatActivity {
                 break;
             }
         }
+        status.setText(statusPrefix + "\n" + RootStore.axesSummary(this, snap.pens));
+        if (external != null) externalGoneAt = -1;
+        else if (holdExternal()) {
+            pageSub.setVisibility(View.VISIBLE);
+            return;
+        }
         setMappingVisible(external != null);
         if (external != null) adoptAxes(external);
-        status.setText(statusPrefix + "\n" + RootStore.axesSummary(this, snap.pens));
-        String line = external == null ? getString(R.string.no_external) : external.name + "  " + external.maxX + "×" + external.maxY;
+        String line;
+        if (external == null) line = getString(R.string.no_external);
+        else if (external.maxX > 0 && external.maxY > 0)
+            line = external.name + "  " + external.maxX + "×" + external.maxY;
+        else line = external.name;
+        pageSub.setVisibility(View.VISIBLE);
         if (!line.equals(deviceLine)) {
             deviceLine = line;
             pageSub.setText(line);
         }
+    }
+
+    /** Keep the previous pen across the 0100-to-0104 gap. A real unplug lasts longer than that. */
+    private boolean holdExternal() {
+        if (deviceLine.isEmpty() || deviceLine.equals(getString(R.string.no_external))) return false;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (externalGoneAt < 0) externalGoneAt = now;
+        if (now - externalGoneAt < EXTERNAL_GAP_MS) return true;
+        externalGoneAt = -1;
+        return false;
     }
 
     private void setMappingVisible(boolean show) {
@@ -274,6 +297,10 @@ public class MainActivity extends AppCompatActivity {
     private void adoptAxes(RootStore.Pen pen) {
         int maxX = pen.maxX;
         int maxY = pen.maxY;
+        if (maxX <= 0 || maxY <= 0) {
+            offerMatch(pen);
+            return;
+        }
         int oldX = profile.hasSpan ? profile.spanX : 15200;
         int oldY = profile.hasSpan ? profile.spanY : 9500;
         boolean changed = maxX != oldX || maxY != oldY;
@@ -292,6 +319,9 @@ public class MainActivity extends AppCompatActivity {
             board.setAxes(tabletMaxX, tabletMaxY, screenW, screenH);
             board.setMapping(profile.mode, profile.crop, profile.hasRect, profile.rect,
                     profile.hasScreen, toFloat(profile.screen));
+            stampDisplay();
+            String json = profile.toJson();
+            io.execute(() -> RootStore.write(MainActivity.this, json));
         }
         offerMatch(pen);
     }
@@ -631,21 +661,12 @@ public class MainActivity extends AppCompatActivity {
                 || !keysOk(profile.internal, getString(R.string.pen_internal))) return;
         stampDisplay();
         String json = profile.toJson();
-        if (haveRoot) pageSub.setText(R.string.writing);
         io.execute(() -> {
             String code = RootStore.write(MainActivity.this, json);
             runOnUiThread(() -> {
                 String message = writeMessage(code);
-                if (!haveRoot) {
-                    pageSub.setText("");
-                    pageSub.setVisibility(View.GONE);
-                    Snackbar.make(root, message, Snackbar.LENGTH_LONG).show();
-                    return;
-                }
-                pageSub.setVisibility(View.VISIBLE);
-                pageSub.setText(message);
                 Snackbar.make(root, message, Snackbar.LENGTH_LONG).show();
-                status.setText(message + "\n\n" + status.getText());
+                if (haveRoot) status.setText(message + "\n\n" + status.getText());
             });
         });
     }

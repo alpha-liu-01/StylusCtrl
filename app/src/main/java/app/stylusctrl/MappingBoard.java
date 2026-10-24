@@ -1,6 +1,7 @@
 package app.stylusctrl;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
@@ -405,21 +406,32 @@ public class MappingBoard extends View {
         return NONE;
     }
 
+    /** Landscape puts the outer corners against the bezel. Keep a finger's width clear of each side. */
+    private float sideInset() {
+        if (getResources().getConfiguration().orientation != Configuration.ORIENTATION_LANDSCAPE) return 0f;
+        return dp(48);
+    }
+
     private void layoutPads() {
         float gap = dp(28);
         float label = dp(28);
-        float w = getWidth() - getPaddingLeft() - getPaddingRight();
-        float h = getHeight() - getPaddingTop() - getPaddingBottom();
+        float side = sideInset();
+        float left = getPaddingLeft() + side;
+        float top = getPaddingTop();
+        float right = getWidth() - getPaddingRight() - side;
+        float bottom = getHeight() - getPaddingBottom();
+        float w = Math.max(1f, right - left);
+        float h = Math.max(1f, bottom - top);
         boolean row = w >= h;
         RectF a = new RectF();
         RectF b = new RectF();
         if (row) {
             float each = (w - gap) / 2f;
-            a.set(getPaddingLeft(), getPaddingTop(), getPaddingLeft() + each, getPaddingTop() + h);
+            a.set(left, top, left + each, bottom);
             b.set(a.right + gap, a.top, a.right + gap + each, a.bottom);
         } else {
             float each = (h - gap) / 2f;
-            a.set(getPaddingLeft(), getPaddingTop(), getPaddingLeft() + w, getPaddingTop() + each);
+            a.set(left, top, right, top + each);
             b.set(a.left, a.bottom + gap, a.right, a.bottom + gap + each);
         }
         letterbox(a, visualMaxX(), visualMaxY(), label, tabletPad);

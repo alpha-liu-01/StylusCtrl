@@ -143,3 +143,89 @@ x 0-15200, y 0-9500, pressure 0-4095
 event11 没有 `BTN_STYLUS2`。第二下走 HID Invert，要开 `/dev/hidraw1`。节点是 `0660 system:system`，标签 `hidraw_device`。守护进程是 root，但不在 `system` 组，也没有 `dac_override`，18:25:12 的日志是 `open /dev/hidraw1 failed: Permission denied`。
 
 这一处在 Lineage 侧改：`ueventd` 把 `/dev/hidraw*` 设成 `0660 system input`，`stylusctrl.te` 允许读 `hidraw_device`。属主仍是 `system`，`system_server` 还能打开。守护进程已经在 `input` 组里。
+
+## 映射不生效，2026-10-24 19:12
+
+构建时间 Sat Oct 24 19:00:47 EDT 2026。压感曲线和 `BTN_STYLUS` 快捷键已经随保存变化。映射页的菜单项不随数位板插拔出现或消失，拉伸、旋转和区域画了也还是整板铺满。
+
+### 配置进了守护进程，坐标没改
+
+19:15 的 `config.json` 已经是这次保存的内容：`mapping.mode` 是 `stretch`，`rotation` 是 180，`rect` 是 `[6970, 3819, 15200, 9500]`。文件是 `0644`。守护进程每秒重读，内核日志有：
+
+```
+config stretch, center, stylus shortcut, eraser eraser, deadzone 0.00-1.00
+tablet rect 6970,3819-15200,9500
+screen rect 0.000,0.000-1.000,1.000
+tablet rotation 180
+```
+
+整段日志里没有 `display %dx%d`。`map_point()` 在 `have_display` 为假时把坐标原样返回。压感和 `BTN_STYLUS` 不经过这一步，所以那两项正常，映射仍是默认的整板铺满。
+
+`have_display` 现在只由配置里的 `display.width` 和 `display.height` 置位。这份文件没有 `display` 对象。
+
+### 跑着的是 16:37 那份 APK
+
+`/system/app/StylusCtrl/StylusCtrl.apk` 的 SHA-256 是 `2a3c73db26fd6f75bb3d0b73e2d1b30e86fda483e54791e4e0685ec78f397a8c`，会写 `display`，也会用 `InputManager` 枚举。`pm path` 指到 `/data/app/.../base.apk`，SHA-256 是 `ef50a302517d48e0440c1b70fe0f943dad4de0a25c56b660571d382bc4739268`，`lastUpdateTime` 是 16:37:37。两边 `versionCode` 都是 8。包标志是 `UPDATED_SYSTEM_APP`，所以系统分区那份没有被启动。
+
+16:37 那份在没有 root 时直接返回，不枚举设备，也不写 `display`。`nav.xml` 里映射项默认可见，`setMappingVisible()` 没被调用，插拔数位板时菜单项保持原样。
+
+把系统分区那份装上去之后，同一份配置变成：
+
+```
+"display": { "width": 2048, "height": 1536, "rotation": 1 }
+```
+
+19:21:02 守护进程记下 `display 2048x1536, rotation 1`。这台平板当前是横屏，`getRealSize()` 的宽高已经换过，和 `map_point()` 用 `disp_w`、`disp_h` 当目标矩形一致。`rotation` 字段只进日志里的 `orientation`。
+
+`dumpsys input` 里，数位板插着时有 `Wacom Co.,Ltd. Wacom One pen tablet small System Control`，`IsExternal: true`，轴 `0–15200`、`0–9500`，压力 `0–4095`。名字不以 `StylusCtrl` 开头。`readInputDevices()` 会把它标成外接笔，映射菜单项随之显示。虚拟设备 `StylusCtrl Wacom ...` 被名字前缀跳过。拔掉后这只设备消失，菜单项应隐藏。
+
+### 要改的版本号
+
+每次打进系统镜像的 APK，`versionCode` 要比这台机器上已经装过的大。现在两边都是 8，PackageManager 会留下 `/data/app` 里的那份。把 `app/build.gradle` 的 `versionCode` 加到 9 再编。下一次系统镜像启动时，数据分区里的旧包会被换掉。
+
+### hidraw 描述符
+
+权限已经放开。19:14:57 打开 `/dev/hidraw1` 成功，下一行是 `report descriptor unreadable: Invalid argument`。`open_pen_hidraw()` 把 `rdesc.size` 设成 `HID_MAX_DESCRIPTOR_SIZE`（4096）。6.6.34 的 `drivers/hid/hidraw.c` 在 `HIDIOCGRDESC` 里拒绝 `len > HID_MAX_DESCRIPTOR_SIZE - 1`，4096 刚好被拒。先 `HIDIOCGRDESCSIZE` 再读，或把 `size` 设成 `HID_MAX_DESCRIPTOR_SIZE - 1`。`BTN_STYLUS` 在 event 节点上，不走这条路径。第二下的 HID Invert 仍然读不到。
+
+## 读到的分辨率是 2457×1535，2026-10-24 19:21
+
+换上会写 `display` 的那份应用之后，它自己又存了一次配置。`mapping.rect` 变成 `[0, 0, 2457, 1535]`，`mapping.span` 变成 `[2457, 1535]`，旋转被写成 0。Magisk 那条 `getevent -p` 读到的 `15200×9500` 才是这支笔的原始轴，守护进程也用这一对。
+
+`dumpsys input` 里同一只设备有两套数：
+
+| | X | Y |
+| --- | --- | --- |
+| Motion Ranges | `0–2457.341` | `0–1535.838` |
+| Raw Touch Axes | `0–15200`，resolution 100 | `0–9500`，resolution 100 |
+
+`readInputDevices()` 用的是 `MotionRange.getMax()`，取到的是前一行。`TouchInputMapper` 在 `POINTER` 模式里用同一个比例把原始轴铺到当前屏幕，保证屏幕四边都能够到、图形不变形：
+
+```
+scale = max(2048/15201, 1536/9501) = 0.161667
+2457.34 = 15200 × 0.161667
+1535.84 = 9500 × 0.161667
+```
+
+2048×1536 是当时的屏幕。`getMax()` 会跟着屏幕旋转变，不是数位板的固有分辨率。`getResolution()` 同样是缩放后的 16.167，`getMax()/getResolution()` 只剩下大约 152 mm，反推不回 15200。Raw Touch Axes 没有进 `InputDevice` 的公开接口。
+
+`adoptAxes()` 看到最大值从 15200×9500 变成 2457×1535，就把已有的 `rect` 按这个比例改写。守护进程不读 `span`（`parse_config` 的测试名就是 `span ignored`）。它把 `rect` 直接拿去和内核轴 `0–15200`、`0–9500` 比。`[0, 0, 2457, 1535]` 只盖住板子左上角大约六分之一，再被拉到整块屏幕。
+
+`InputManager` 继续用来判断插拔、名字、厂商号和产品号。不要把 `getMax()` 写进 `pen.maxX`、`pen.maxY`，也不要因此调用 `adoptAxes()` 去改 `span` 和 `rect`。轴的最大值保持 `getevent -p` 那一对。没有 root 时应用读不到 Raw Touch Axes；这台机器上守护进程抓取时已经拿到 `x 0-15200, y 0-9500`。要让没见过的板子也能显示原始范围，就由守护进程把这对原始最大最小值交给应用，不要从 `MotionRange` 换算。
+
+上一节的 `versionCode` 和 `HIDIOCGRDESC` 不改变这对轴。
+
+## 型号和分辨率保存或插拔后消失，2026-10-24 19:28
+
+标题下面那一行是 `page_sub`。有外接笔时写成名字加 `maxX×maxY`，没有时写成「没有外接数位板」。19:28 插拔两次，内核都是先 `0531:0100`，大约 3 秒后换成 `0531:0104`，守护进程再抓 `event11`。抓完之后 `dumpsys input` 里 `System Control` 仍在，`IsExternal: true`，原始轴仍是 `15200×9500`。列表不是空的。
+
+### 保存把这一行藏起来
+
+没有 root 时 `haveRoot` 为假。`save()` 写完配置后执行 `pageSub.setText("")` 和 `setVisibility(GONE)`。成功提示已经在 Snackbar 里。`watchDevices` 每 1.5 秒调用 `applyDevices()`，那里只在文案变化时 `setText`，没有 `setVisibility(VISIBLE)`。`deviceLine` 还留着保存前的那一行，下一轮轮询文案相同，连 `setText` 都不做。这一行就一直是空的。调整映射后要点保存，所以看起来是一调整就没了。
+
+`save()` 不要改 `page_sub`。`applyDevices()` 在写出型号那一行时把它设回 `VISIBLE`。
+
+### 一次空轮询就当成拔掉
+
+`0100` 拆掉到 `0104` 出现之间，`InputManager` 里会有一小段没有外接笔。1.5 秒的轮询能落进去。`applyDevices()` 立刻把 `external` 当成没有：副标题改成「没有外接数位板」，`setMappingVisible(false)` 把映射页从菜单拿掉，如果当时停在映射页，选中项跳到压感。板子随即回来，但这一下已经把正在看的页面换走了。
+
+外接笔要连续缺席超过这次重新枚举（大约 3 秒，多于两轮 1.5 秒的轮询）再隐藏菜单和清掉副标题。中间轮询继续显示上一只的名字和轴。虚拟设备名字以 `StylusCtrl` 开头，不能拿它来充外接笔。
