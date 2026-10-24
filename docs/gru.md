@@ -199,7 +199,9 @@ allow stylusctrl app_data_file:file { getattr open read };
 /system/bin/stylusctld    u:object_r:stylusctrl_exec:s0
 ```
 
-内屏笔不跑 `dumpsys`。外接板的拉伸和等比才会 `popen("dumpsys display")`，那条要另外的执行权限。这台机器先只开内屏。
+屏幕的像素宽高和旋转写在配置的 `display` 里。守护进程用它设置 `disp_w`、`disp_h`、`orientation`、`have_display`，不再执行 `dumpsys`。不要为这一处放行 shell。
+
+外接笔的第二侧键走 `/dev/hidraw*`。`ueventd.gru.rc` 增加 `/dev/hidraw*    0660    system    input`。`stylusctrl.te` 允许读 `hidraw_device`。属主保持 `system`，`system_server` 还能打开。守护进程已经在 `input` 组里。
 
 Android 16 若因为 ioctl 的 neverallow 编不过，先在 `stylusctrl.te` 加 `permissive stylusctrl;`，userdebug 上抓一次笔，再按 `dmesg` 里的拒绝收紧。预期要的是 `input_device` 上的 `EVIOCGRAB` 和读事件，以及 `uhid_device`（`/dev/uinput`）上的 `UI_SET_*` / `UI_DEV_CREATE`。
 

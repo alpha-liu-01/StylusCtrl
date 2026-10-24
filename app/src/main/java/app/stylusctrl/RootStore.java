@@ -1,7 +1,14 @@
 package app.stylusctrl;
 
 import android.content.Context;
+import android.graphics.Point;
+import android.hardware.input.InputManager;
+import android.os.Build;
 import android.util.Base64;
+import android.view.Display;
+import android.view.InputDevice;
+import android.view.MotionEvent;
+import android.view.WindowManager;
 
 import com.topjohnwu.superuser.Shell;
 
@@ -42,7 +49,6 @@ public final class RootStore {
         public String configText;
         public String daemonPid;
         public String devices;
-        public String display;
         public String error;
         /** Settings live in the app directory. The system daemon reads that file. */
         public boolean local;
@@ -60,6 +66,8 @@ public final class RootStore {
             if (!snap.root) {
                 snap.local = true;
                 snap.configText = readLocal(context);
+                readInputDevices(context, snap);
+                readScreen(context, snap);
                 return snap;
             }
             Shell.Result cfg = Shell.cmd("base64 " + CONFIG_PATH).exec();
@@ -72,9 +80,7 @@ public final class RootStore {
             snap.daemonPid = pid.getOut().isEmpty() ? "" : pid.getOut().get(0).trim();
             Shell.Result ev = Shell.cmd(DEVICE_CMD).exec();
             applyDeviceDump(snap, join(ev.getOut()));
-            Shell.Result display = Shell.cmd("dumpsys display").exec();
-            snap.display = join(display.getOut());
-            readDisplay(snap);
+            readScreen(context, snap);
         } catch (Exception e) {
             snap.error = e.getMessage() == null ? e.toString() : e.getMessage();
         }
@@ -82,13 +88,13 @@ public final class RootStore {
     }
 
     /** Names, axes, and ids only. Used while the screen is open to notice plug and unplug. */
-    public static Snapshot readDevices() {
+    public static Snapshot readDevices(Context context) {
         Snapshot snap = new Snapshot();
         try {
-            Shell.Result id = Shell.cmd("id -u").exec();
-            snap.root = id.isSuccess() && !id.getOut().isEmpty() && "0".equals(id.getOut().get(0).trim());
+            snap.root = isRoot();
             if (!snap.root) {
-                snap.error = id.getErr().isEmpty() ? "no_root" : join(id.getErr());
+                snap.local = true;
+                readInputDevices(context, snap);
                 return snap;
             }
             Shell.Result ev = Shell.cmd(DEVICE_CMD).exec();
@@ -99,11 +105,25 @@ public final class RootStore {
         return snap;
     }
 
-    public static void rereadDisplay() {
-        try {
-            Shell.cmd("if pidof stylusctld >/dev/null 2>&1; then kill -USR1 $(pidof stylusctld); fi").exec();
-        } catch (Exception ignored) {
-        }
+    /** Pixel size of the internal panel, and Surface.ROTATION_* (0–3). */
+    public static final class Screen {
+        public int width;
+        public int height;
+        public int rotation;
+    }
+
+    @SuppressWarnings("deprecation")
+    public static Screen currentScreen(Context context) {
+        Screen screen = new Screen();
+        WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        if (wm == null) return screen;
+        Display display = wm.getDefaultDisplay();
+        Point size = new Point();
+        display.getRealSize(size);
+        screen.width = size.x;
+        screen.height = size.y;
+        screen.rotation = display.getRotation();
+        return screen;
     }
 
     public static String write(Context context, String json) {
@@ -333,50 +353,44 @@ public final class RootStore {
         }
     }
 
-    private static void readDisplay(Snapshot snap) {
-        if (snap.display == null) return;
-        int from = 0;
-        int best = -1;
-        boolean bestActive = false;
-        while (true) {
-            int at = snap.display.indexOf("type=INTERNAL", from);
-            if (at < 0) break;
-            int end = snap.display.indexOf('}', at);
-            if (end < 0) end = Math.min(snap.display.length(), at + 4000);
-            String slice = snap.display.substring(at, end);
-            boolean active = slice.contains("isActive=true");
-            if (best < 0 || (active && !bestActive)) {
-                best = at;
-                bestActive = active;
+    private static void readScreen(Context context, Snapshot snap) {
+        Screen screen = currentScreen(context);
+        snap.screenW = screen.width;
+        snap.screenH = screen.height;
+    }
+
+    /** Same fields classify() already uses. Names starting with StylusCtrl are left for that filter. */
+    private static void readInputDevices(Context context, Snapshot snap) {
+        InputManager manager = (InputManager) context.getSystemService(Context.INPUT_SERVICE);
+        if (manager == null) return;
+        for (int id : manager.getInputDeviceIds()) {
+            InputDevice dev = manager.getInputDevice(id);
+            if (dev == null) continue;
+            Pen pen = new Pen();
+            pen.name = dev.getName() == null ? "" : dev.getName();
+            pen.vendor = String.format(Locale.US, "%04x", dev.getVendorId() & 0xffff);
+            pen.product = String.format(Locale.US, "%04x", dev.getProductId() & 0xffff);
+            int sources = dev.getSources();
+            boolean touch = (sources & InputDevice.SOURCE_TOUCHSCREEN) != 0;
+            boolean stylus = (sources & InputDevice.SOURCE_STYLUS) != 0;
+            boolean mouse = (sources & InputDevice.SOURCE_MOUSE) != 0;
+            pen.penTool = stylus;
+            pen.direct = touch;
+            pen.pointer = !touch && (stylus || mouse);
+            InputDevice.MotionRange x = dev.getMotionRange(MotionEvent.AXIS_X);
+            InputDevice.MotionRange y = dev.getMotionRange(MotionEvent.AXIS_Y);
+            InputDevice.MotionRange pressure = dev.getMotionRange(MotionEvent.AXIS_PRESSURE);
+            if (x != null && x.getMax() > 0) pen.maxX = (int) x.getMax();
+            if (y != null && y.getMax() > 0) pen.maxY = (int) y.getMax();
+            pen.pressure = pressure != null && pressure.getMax() > 0;
+            boolean externalDevice = Build.VERSION.SDK_INT >= 29 && dev.isExternal();
+            if (externalDevice && pen.pressure && pen.maxX > 0 && pen.maxY > 0 && !pen.name.startsWith("StylusCtrl")) {
+                pen.pointer = true;
+                pen.direct = false;
             }
-            if (active) break;
-            from = at + 13;
+            snap.pens.add(pen);
         }
-        if (best < 0 || !bestActive) return;
-        int end = snap.display.indexOf('}', best);
-        String slice = snap.display.substring(best, end < 0 ? snap.display.length() : end);
-        int frame = slice.indexOf("logicalFrame=Rect(");
-        if (frame < 0) return;
-        String body = slice.substring(frame + "logicalFrame=Rect(".length());
-        String[] parts = body.split("[^0-9-]+");
-        int[] nums = new int[4];
-        int n = 0;
-        for (String part : parts) {
-            if (part.isEmpty() || "-".equals(part)) continue;
-            try {
-                nums[n++] = Integer.parseInt(part);
-            } catch (NumberFormatException e) {
-                return;
-            }
-            if (n == 4) break;
-        }
-        if (n < 4) return;
-        int w = nums[2] - nums[0];
-        int h = nums[3] - nums[1];
-        if (w > 0 && h > 0) {
-            snap.screenW = w;
-            snap.screenH = h;
-        }
+        for (Pen pen : snap.pens) classify(pen);
     }
 
     public static String axesSummary(Context context, List<Pen> pens) {

@@ -147,6 +147,9 @@ struct profile {
     int disp_h;
     int orientation;
     int have_display;
+    /* Set while parsing display.width or display.height. Absent keys keep the
+       size already stored on this profile. */
+    int saw_display;
 };
 
 static unsigned axis_bit(int code) {
@@ -847,13 +850,21 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
         } else if (!strcmp(local, "pressure.ceiling")) prof->ceiling = v;
         else prof->deadzone = v;
     }
-    if (!strcmp(path, "mapping.rotation")) {
+    if (!strcmp(path, "mapping.rotation") || !strcmp(path, "display.rotation")) {
         int q = (int)(v >= 0 ? v + 0.5 : v - 0.5);
         if (q == 90) q = 1;
         else if (q == 180) q = 2;
         else if (q == 270) q = 3;
         if (q < 0 || q > 3) return -1;
-        prof->rotation = q;
+        if (!strcmp(path, "display.rotation")) prof->orientation = q;
+        else prof->rotation = q;
+    }
+    if (!strcmp(path, "display.width") || !strcmp(path, "display.height")) {
+        int n = (int)(v >= 0 ? v + 0.5 : v - 0.5);
+        if (n <= 0) return -1;
+        prof->saw_display = 1;
+        if (!strcmp(path, "display.width")) prof->disp_w = n;
+        else prof->disp_h = n;
     }
     *pp = end;
     return 0;
@@ -865,6 +876,7 @@ static int parse_config(const char *text, struct profile *prof) {
     if (parse_value(&p, "", prof) < 0) return -1;
     p = skip_ws(p);
     if (*p) return -1;
+    if (prof->saw_display) prof->have_display = prof->disp_w > 0 && prof->disp_h > 0;
     return 0;
 }
 
@@ -1684,6 +1696,27 @@ static void test_internal_feel(void) {
     expect("span ignored", parse_config("{\"mapping\":{\"span\":[100,200]}}", &p), 0);
 }
 
+static void test_display_config(void) {
+    struct profile p;
+    memset(&p, 0, sizeof p);
+    profile_reset(&p);
+    const char *text =
+        "{\"display\":{\"width\":2048,\"height\":1536,\"rotation\":3},"
+        "\"mapping\":{\"mode\":\"fit\",\"rotation\":90}}";
+    expect("display config", parse_config(text, &p), 0);
+    expect("display w", p.disp_w, 2048);
+    expect("display h", p.disp_h, 1536);
+    expect("display ori", p.orientation, 3);
+    expect("have display", p.have_display, 1);
+    expect("tablet rot stays", p.rotation, 1);
+    struct profile kept = p;
+    profile_reset(&kept);
+    expect("keep size", parse_config("{\"mapping\":{\"mode\":\"stretch\"}}", &kept), 0);
+    expect("kept w", kept.disp_w, 2048);
+    expect("kept have", kept.have_display, 1);
+    expect("mode stretch", kept.mode, MODE_STRETCH);
+}
+
 static void test_builtin_pen(void) {
     expect("samsung name", is_builtin_pen("sec_e-pen", 0, 0, 0, 0), 1);
     expect("scarlet", is_builtin_pen("hid-over-i2c 2D1F:0036 Stylus", 1, 1, 0, BUS_I2C), 1);
@@ -1725,6 +1758,7 @@ int main(void) {
     test_button_actions();
     test_internal_feel();
     test_relay_dock();
+    test_display_config();
     test_builtin_pen();
     if (failures) {
         fprintf(stderr, "%d failed\n", failures);
@@ -1752,8 +1786,6 @@ static int held_stylus;
 static int held_rubber;
 static int held_stylus_in;
 static int held_rubber_in;
-static long display_ms;
-static int display_inactive_logged;
 
 static int bit_is_set(const unsigned long *bits, int bit) {
     int width = (int)(8 * sizeof(unsigned long));
@@ -2106,6 +2138,7 @@ static void log_profile(void) {
     if (cfg.has_screen)
         log_msg("screen rect %.3f,%.3f-%.3f,%.3f", cfg.screen[0], cfg.screen[1], cfg.screen[2], cfg.screen[3]);
     if (cfg.rotation) log_msg("tablet rotation %d", cfg.rotation * 90);
+    if (cfg.have_display) log_msg("display %dx%d, rotation %d", cfg.disp_w, cfg.disp_h, cfg.orientation);
     if (cfg.has_match) log_msg("match %04x:%04x only", cfg.vendor, cfg.product);
     if (cfg.curve_n) log_msg("pressure curve loaded");
     if (cfg.in_ready) {
@@ -2194,106 +2227,6 @@ static int load_config(void) {
     cfg_loaded = 1;
     log_profile();
     return 0;
-}
-
-static int refresh_display(void) {
-    display_ms = now_ms();
-    FILE *fp = popen("dumpsys display", "r");
-    if (!fp) {
-        log_errno("dumpsys display");
-        return -1;
-    }
-    size_t cap = 192 * 1024;
-    char *buf = malloc(cap);
-    if (!buf) {
-        pclose(fp);
-        return -1;
-    }
-    size_t n = 0;
-    while (n + 1 < cap) {
-        size_t got = fread(buf + n, 1, cap - 1 - n, fp);
-        n += got;
-        if (got == 0) break;
-    }
-    buf[n] = 0;
-    pclose(fp);
-    char *best = NULL;
-    int best_active = 0;
-    for (char *p = buf; (p = strstr(p, "type=INTERNAL")) != NULL; p += 13) {
-        char *end = strchr(p, '}');
-        if (!end || end - p > 8000) continue;
-        char saved = *end;
-        *end = 0;
-        int active = strstr(p, "isActive=true") != NULL;
-        *end = saved;
-        if (!best || (active && !best_active)) {
-            best = p;
-            best_active = active;
-        }
-        if (active) break;
-    }
-    if (!best) {
-        free(buf);
-        log_msg("dumpsys has no internal display");
-        return -1;
-    }
-    if (!best_active) {
-        free(buf);
-        if (!display_inactive_logged) {
-            display_inactive_logged = 1;
-            log_msg("viewport is inactive, keeping the previous size");
-        }
-        return -1;
-    }
-    display_inactive_logged = 0;
-    char *end = strchr(best, '}');
-    size_t len = end ? (size_t)(end - best) : strlen(best);
-    if (len > 8000) len = 8000;
-    char saved = best[len];
-    best[len] = 0;
-    char *o = strstr(best, "orientation=");
-    int dw = 0;
-    int dh = 0;
-    char *frame = strstr(best, "logicalFrame=Rect(");
-    if (frame) {
-        int x0, y0, x1, y1;
-        if (sscanf(frame, "logicalFrame=Rect(%d, %d - %d, %d)", &x0, &y0, &x1, &y1) == 4) {
-            dw = x1 - x0;
-            dh = y1 - y0;
-        }
-    }
-    if (dw <= 0 || dh <= 0) {
-        char *w = strstr(best, "deviceWidth=");
-        char *h = strstr(best, "deviceHeight=");
-        if (w && h) {
-            dw = atoi(w + 12);
-            dh = atoi(h + 13);
-        }
-    }
-    if (!o || dw <= 0 || dh <= 0) {
-        best[len] = saved;
-        free(buf);
-        log_msg("display orientation unavailable");
-        return -1;
-    }
-    int ori = atoi(o + 12);
-    best[len] = saved;
-    free(buf);
-    if (ori < 0 || ori > 3) {
-        log_msg("unexpected display size");
-        return -1;
-    }
-    int changed = !cfg.have_display || cfg.disp_w != dw || cfg.disp_h != dh || cfg.orientation != ori;
-    cfg.have_display = 1;
-    cfg.disp_w = dw;
-    cfg.disp_h = dh;
-    cfg.orientation = ori;
-    if (changed) log_msg("display %dx%d, rotation %d", dw, dh, ori);
-    return 0;
-}
-
-static int need_display(void) {
-    return cfg_loaded && (cfg.mode == MODE_STRETCH || cfg.mode == MODE_FIT);
 }
 
 static void idc_path_for(const char *vname, char *out, int cap) {
@@ -2996,7 +2929,6 @@ static void reload_config(struct pen *pens, int *npens) {
     release_held();
     if (load_config() == 0) {
         sync_keyboard();
-        if (need_display()) refresh_display();
         if (!cfg.internal_on) {
             for (int i = *npens - 1; i >= 0; i--) {
                 if (!pens[i].direct || pens[i].fd < 0) continue;
@@ -3061,7 +2993,6 @@ static int run_daemon(void) {
     int waiting = 0;
     int watch = open_input_watch();
     scan(pens, &npens);
-    if (need_display()) refresh_display();
     if (npens == 0) {
         log_waiting();
         waiting = 1;
@@ -3136,7 +3067,6 @@ static int run_daemon(void) {
                 saw_watch = 1;
             }
         }
-        if (pr == 0 && npens > 0 && need_display() && now_ms() - display_ms >= 1000) refresh_display();
         if (now_ms() - config_check_ms >= 1000) {
             config_check_ms = now_ms();
             if (config_time_changed()) {
@@ -3148,7 +3078,6 @@ static int run_daemon(void) {
         if (pr == 0 || npens == 0 || saw_watch) {
             int before = npens;
             scan(pens, &npens);
-            if (npens > before && need_display()) refresh_display();
             if (npens == 0 && !waiting) {
                 log_waiting();
                 waiting = 1;

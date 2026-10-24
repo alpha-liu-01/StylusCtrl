@@ -145,14 +145,13 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void run() {
             if (!resumed) return;
-            if (knowRoot && !haveRoot) return;
             if (!devicesBusy) {
                 devicesBusy = true;
                 io.execute(() -> {
-                    RootStore.Snapshot snap = RootStore.readDevices();
+                    RootStore.Snapshot snap = RootStore.readDevices(MainActivity.this);
                     runOnUiThread(() -> {
                         devicesBusy = false;
-                        if (resumed && snap.root) applyDevices(snap);
+                        if (resumed && snap.error == null) applyDevices(snap);
                     });
                 });
             }
@@ -225,13 +224,13 @@ public class MainActivity extends AppCompatActivity {
         }
         showProfile(profile);
         if (snap.local) {
-            if (parsed) {
-                pageSub.setText("");
-                pageSub.setVisibility(View.GONE);
-            }
-            String screen = screenW > 0 ? getString(R.string.screen_size, screenW, screenH).trim() : "";
+            int showW = snap.screenW > 0 ? snap.screenW : screenW;
+            int showH = snap.screenH > 0 ? snap.screenH : screenH;
+            String screen = showW > 0 ? getString(R.string.screen_size, showW, showH).trim() : "";
             statusPrefix = screen;
-            status.setText(screen);
+            if (parsed) publishDisplay();
+            applyDevices(snap);
+            if (!parsed) pageSub.setText(R.string.config_parse_failed);
             return;
         }
         pageSub.setVisibility(View.VISIBLE);
@@ -242,6 +241,7 @@ public class MainActivity extends AppCompatActivity {
                 ? getString(R.string.screen_size, snap.screenW, snap.screenH)
                 : getString(R.string.no_active_screen);
         statusPrefix = daemon + screen;
+        if (parsed) publishDisplay();
         applyDevices(snap);
     }
 
@@ -443,6 +443,25 @@ public class MainActivity extends AppCompatActivity {
         board.setMapping(profile.mode, profile.crop, profile.hasRect, profile.rect, profile.hasScreen, toFloat(profile.screen));
     }
 
+    /** Writes the panel size into the config when it changes. The daemon reads that instead of dumpsys. */
+    private void publishDisplay() {
+        if (!stampDisplay()) return;
+        String json = profile.toJson();
+        io.execute(() -> RootStore.write(MainActivity.this, json));
+    }
+
+    private boolean stampDisplay() {
+        RootStore.Screen screen = RootStore.currentScreen(this);
+        if (screen.width <= 0 || screen.height <= 0) return false;
+        if (profile.hasDisplay && profile.displayW == screen.width && profile.displayH == screen.height
+                && profile.displayRotation == screen.rotation) return false;
+        profile.hasDisplay = true;
+        profile.displayW = screen.width;
+        profile.displayH = screen.height;
+        profile.displayRotation = screen.rotation;
+        return true;
+    }
+
     private void applyWindowSize() {
         int[] window = readWindowSize();
         if (window[0] <= 0 || window[1] <= 0) return;
@@ -451,7 +470,7 @@ public class MainActivity extends AppCompatActivity {
         screenH = window[1];
         board.setAxes(tabletMaxX, tabletMaxY, screenW, screenH);
         board.setMapping(profile.mode, profile.crop, profile.hasRect, profile.rect, profile.hasScreen, toFloat(profile.screen));
-        io.execute(RootStore::rereadDisplay);
+        publishDisplay();
     }
 
     @SuppressWarnings("deprecation")
@@ -610,6 +629,7 @@ public class MainActivity extends AppCompatActivity {
     private void save() {
         if (!keysOk(profile.external, getString(R.string.pen_external))
                 || !keysOk(profile.internal, getString(R.string.pen_internal))) return;
+        stampDisplay();
         String json = profile.toJson();
         if (haveRoot) pageSub.setText(R.string.writing);
         io.execute(() -> {

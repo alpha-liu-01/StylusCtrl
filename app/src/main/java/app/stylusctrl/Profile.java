@@ -19,6 +19,11 @@ public class Profile {
     public double[] screen = new double[] {0, 0, 1, 1};
     /** 0, 90, 180, or 270. The tablet's own rotation, independent of the screen. */
     public int rotation;
+    /** Pixel size and Surface rotation (0–3) of the internal display. The daemon maps from this. */
+    public boolean hasDisplay;
+    public int displayW;
+    public int displayH;
+    public int displayRotation;
     /** Axis max the rect was edited against. Missing on old files; the app assumes 15200×9500. */
     public boolean hasSpan;
     public int spanX = 15200;
@@ -93,6 +98,17 @@ public class Profile {
             else if (rotation == 2) rotation = 180;
             else if (rotation == 3) rotation = 270;
             if (rotation == 90 || rotation == 180 || rotation == 270) p.rotation = rotation;
+        }
+        JSONObject display = root.optJSONObject("display");
+        if (display != null) {
+            p.displayW = display.optInt("width", 0);
+            p.displayH = display.optInt("height", 0);
+            int turn = display.optInt("rotation", 0);
+            if (turn == 90) turn = 1;
+            else if (turn == 180) turn = 2;
+            else if (turn == 270) turn = 3;
+            if (turn >= 0 && turn <= 3) p.displayRotation = turn;
+            p.hasDisplay = p.displayW > 0 && p.displayH > 0;
         }
         readFeelPressure(root.optJSONObject("pressure"), p.external);
         readFeelButtons(root.optJSONObject("buttons"), root.optJSONObject("tools"), p.external);
@@ -182,6 +198,10 @@ public class Profile {
     public String toJson() {
         StringBuilder b = new StringBuilder();
         b.append("{\n");
+        if (hasDisplay) {
+            b.append("  \"display\": { \"width\": ").append(displayW).append(", \"height\": ").append(displayH)
+                    .append(", \"rotation\": ").append(displayRotation).append(" },\n");
+        }
         b.append("  \"match\": { \"vendor\": \"").append(vendor).append("\", \"product\": \"")
                 .append(product).append("\" },\n");
         b.append("  \"mapping\": { \"mode\": \"").append(mode).append("\", \"crop\": \"")
