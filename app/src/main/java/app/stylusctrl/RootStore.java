@@ -162,7 +162,12 @@ public final class RootStore {
         }
         if (out.exists() && !out.delete()) return "failed";
         if (!tmp.renameTo(out)) return "failed";
-        return "local";
+        // The daemon runs as root without dac_override. The app directory must be
+        // traversable (0711) and the file world-readable (0644). files/ is already 0771.
+        boolean opened = context.getDataDir().setExecutable(true, false)
+                && context.getFilesDir().setExecutable(true, false)
+                && out.setReadable(true, false);
+        return opened ? "local" : "failed";
     }
 
     private static final String DEVICE_CMD =

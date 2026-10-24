@@ -1854,7 +1854,7 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
     struct uinput_setup setup;
     int ufd = open("/dev/uinput", O_WRONLY | O_CLOEXEC);
     if (ufd < 0) {
-        log_errno("打开 /dev/uinput");
+        log_errno("open /dev/uinput");
         return -1;
     }
     for (int i = 0; i < 3; i++) {
@@ -1898,7 +1898,7 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
     *ufd_out = ufd;
     return 0;
 fail:
-    log_errno("建立虚拟设备");
+    log_errno("create virtual device");
     close(ufd);
     return -1;
 }
@@ -1974,22 +1974,22 @@ static int check_mode(void) {
     int ok = 1;
     snprintf(path, sizeof path, "/sys/class/input/%s/name", sysname);
     if (read_text(path, text, sizeof text) < 0 || strncmp(text, "StylusCtrl check", 16) != 0) {
-        log_msg("名字不对: %s", text);
+        log_msg("unexpected name: %s", text);
         ok = 0;
     }
     snprintf(path, sizeof path, "/sys/class/input/%s/id/bustype", sysname);
     if (read_text(path, text, sizeof text) < 0 || strtoul(text, NULL, 16) != BUS_USB) {
-        log_msg("bustype 不是 USB: %s", text);
+        log_msg("bustype is not USB: %s", text);
         ok = 0;
     }
     snprintf(path, sizeof path, "/sys/class/input/%s/id/vendor", sysname);
     if (read_text(path, text, sizeof text) < 0 || strtoul(text, NULL, 16) != 0x0531) {
-        log_msg("vendor 不是 0531: %s", text);
+        log_msg("vendor is not 0531: %s", text);
         ok = 0;
     }
     snprintf(path, sizeof path, "/sys/class/input/%s/properties", sysname);
     if (read_text(path, text, sizeof text) < 0 || !parse_bitmap_bit(text, INPUT_PROP_POINTER)) {
-        log_msg("没有 INPUT_PROP_POINTER: %s", text);
+        log_msg("missing INPUT_PROP_POINTER: %s", text);
         ok = 0;
     }
     snprintf(path, sizeof path, "/sys/class/input/%s/capabilities/abs", sysname);
@@ -1997,14 +1997,14 @@ static int check_mode(void) {
         !parse_bitmap_bit(text, ABS_Y) || !parse_bitmap_bit(text, ABS_PRESSURE) ||
         !parse_bitmap_bit(text, ABS_TILT_X) || !parse_bitmap_bit(text, ABS_TILT_Y) ||
         parse_bitmap_bit(text, ABS_DISTANCE)) {
-        log_msg("轴不对: %s", text);
+        log_msg("unexpected axes: %s", text);
         ok = 0;
     }
     snprintf(path, sizeof path, "/sys/class/input/%s/capabilities/key", sysname);
     if (read_text(path, text, sizeof text) < 0 || !parse_bitmap_bit(text, BTN_TOOL_PEN) ||
         !parse_bitmap_bit(text, BTN_TOOL_RUBBER) || !parse_bitmap_bit(text, BTN_TOUCH) ||
         !parse_bitmap_bit(text, BTN_STYLUS)) {
-        log_msg("键不对: %s", text);
+        log_msg("unexpected keys: %s", text);
         ok = 0;
     }
     ioctl(ufd, UI_DEV_DESTROY);
@@ -2016,11 +2016,11 @@ static int check_mode(void) {
         usleep(50000);
     }
     if (access(path, F_OK) == 0) {
-        log_msg("虚拟设备 %s 还在", sysname);
+        log_msg("virtual device %s still present", sysname);
         ok = 0;
     }
     if (!ok) return 1;
-    log_msg("check 通过，曾建立 %s（%s），退出后已消失", node, sysname);
+    log_msg("check passed, created %s (%s), gone after close", node, sysname);
     return 0;
 }
 
@@ -2062,54 +2062,54 @@ static long now_ms(void) {
 }
 
 static const char *mode_word(int mode) {
-    if (mode == MODE_STRETCH) return "拉伸铺满";
-    if (mode == MODE_FIT) return "等比裁切";
-    return "原样";
+    if (mode == MODE_STRETCH) return "stretch";
+    if (mode == MODE_FIT) return "fit";
+    return "passthrough";
 }
 
 static const char *crop_word(int crop) {
     switch (crop) {
     case CROP_LEFT:
-        return "靠左";
+        return "left";
     case CROP_RIGHT:
-        return "靠右";
+        return "right";
     case CROP_TOP:
-        return "靠上";
+        return "top";
     case CROP_BOTTOM:
-        return "靠下";
+        return "bottom";
     default:
-        return "居中";
+        return "center";
     }
 }
 
 static const char *stylus_word(int act) {
-    if (act == STYLUS_SHORTCUT) return "快捷键";
-    if (act == STYLUS_ERASER) return "按住橡皮";
-    return "原样";
+    if (act == STYLUS_SHORTCUT) return "shortcut";
+    if (act == STYLUS_ERASER) return "hold-eraser";
+    return "passthrough";
 }
 
 static const char *rubber_word(int act) {
-    if (act == RUBBER_SHORTCUT) return "快捷键";
+    if (act == RUBBER_SHORTCUT) return "shortcut";
     if (act == RUBBER_STYLUS2) return "BTN_STYLUS2";
-    return "橡皮";
+    return "eraser";
 }
 
 static void log_profile(void) {
     if (!cfg_loaded) {
-        log_msg("没有配置文件 %s，坐标和压感原样转发", config_path);
+        log_msg("no config %s, forwarding coordinates and pressure unchanged", config_path);
         return;
     }
-    log_msg("配置 %s，%s，侧键%s，橡皮位%s，死区 %.2f–%.2f", mode_word(cfg.mode), crop_word(cfg.crop),
+    log_msg("config %s, %s, stylus %s, eraser %s, deadzone %.2f-%.2f", mode_word(cfg.mode), crop_word(cfg.crop),
             stylus_word(cfg.stylus_action),
             rubber_word(cfg.rubber_action), cfg.deadzone, cfg.ceiling > cfg.deadzone ? cfg.ceiling : 1.0);
-    if (cfg.has_rect) log_msg("板内矩形 %d,%d-%d,%d", cfg.rect[0], cfg.rect[1], cfg.rect[2], cfg.rect[3]);
+    if (cfg.has_rect) log_msg("tablet rect %d,%d-%d,%d", cfg.rect[0], cfg.rect[1], cfg.rect[2], cfg.rect[3]);
     if (cfg.has_screen)
-        log_msg("屏幕矩形 %.3f,%.3f-%.3f,%.3f", cfg.screen[0], cfg.screen[1], cfg.screen[2], cfg.screen[3]);
-    if (cfg.rotation) log_msg("数位板旋转 %d", cfg.rotation * 90);
-    if (cfg.has_match) log_msg("只抓 %04x:%04x", cfg.vendor, cfg.product);
-    if (cfg.curve_n) log_msg("压感曲线已加载");
+        log_msg("screen rect %.3f,%.3f-%.3f,%.3f", cfg.screen[0], cfg.screen[1], cfg.screen[2], cfg.screen[3]);
+    if (cfg.rotation) log_msg("tablet rotation %d", cfg.rotation * 90);
+    if (cfg.has_match) log_msg("match %04x:%04x only", cfg.vendor, cfg.product);
+    if (cfg.curve_n) log_msg("pressure curve loaded");
     if (cfg.in_ready) {
-        log_msg("内屏单独一份，侧键%s，橡皮位%s，死区 %.2f–%.2f", stylus_word(cfg.in_stylus_action),
+        log_msg("internal profile, stylus %s, eraser %s, deadzone %.2f-%.2f", stylus_word(cfg.in_stylus_action),
                 rubber_word(cfg.in_rubber_action),
                 cfg.in_deadzone, cfg.in_ceiling > cfg.in_deadzone ? cfg.in_ceiling : 1.0);
     }
@@ -2186,7 +2186,7 @@ static int load_config(void) {
     profile_reset(&next);
     if (parse_config(text, &next) < 0) {
         free(text);
-        log_msg("配置解析失败，沿用上一份：%s", config_path);
+        log_msg("config parse failed, keeping the previous profile: %s", config_path);
         return -1;
     }
     free(text);
@@ -2234,14 +2234,14 @@ static int refresh_display(void) {
     }
     if (!best) {
         free(buf);
-        log_msg("dumpsys 里没有内屏");
+        log_msg("dumpsys has no internal display");
         return -1;
     }
     if (!best_active) {
         free(buf);
         if (!display_inactive_logged) {
             display_inactive_logged = 1;
-            log_msg("屏幕 viewport 不在活动状态，先不改尺寸");
+            log_msg("viewport is inactive, keeping the previous size");
         }
         return -1;
     }
@@ -2273,14 +2273,14 @@ static int refresh_display(void) {
     if (!o || dw <= 0 || dh <= 0) {
         best[len] = saved;
         free(buf);
-        log_msg("读不到屏幕方向");
+        log_msg("display orientation unavailable");
         return -1;
     }
     int ori = atoi(o + 12);
     best[len] = saved;
     free(buf);
     if (ori < 0 || ori > 3) {
-        log_msg("屏幕尺寸不对");
+        log_msg("unexpected display size");
         return -1;
     }
     int changed = !cfg.have_display || cfg.disp_w != dw || cfg.disp_h != dh || cfg.orientation != ori;
@@ -2288,7 +2288,7 @@ static int refresh_display(void) {
     cfg.disp_w = dw;
     cfg.disp_h = dh;
     cfg.orientation = ori;
-    if (changed) log_msg("屏幕 %dx%d，旋转 %d", dw, dh, ori);
+    if (changed) log_msg("display %dx%d, rotation %d", dw, dh, ori);
     return 0;
 }
 
@@ -2315,7 +2315,7 @@ static void sync_idc(struct pen *pen) {
     if (!pen->idc_path[0]) return;
     /* POINTER must stay orientationAware false. A name IDC with that flag
        swaps the raw axes and crops a landscape screen down to 12:20. */
-    if (unlink(pen->idc_path) == 0) log_msg("去掉 IDC %s", pen->idc_path);
+    if (unlink(pen->idc_path) == 0) log_msg("removed IDC %s", pen->idc_path);
     else if (errno != ENOENT) log_errno(pen->idc_path);
 }
 
@@ -2440,7 +2440,7 @@ static void emit_shortcut(const int *keys, int nkeys, int down) {
     if (n < 0) return;
     for (int i = 0; i < n; i++) {
         if (write_all(kbd_fd, &evs[i], sizeof evs[i]) < 0) {
-            log_errno("写入快捷键");
+            log_errno("write shortcut");
             return;
         }
     }
@@ -2469,7 +2469,7 @@ static void release_held(void) {
 static int create_keyboard(const int *codes, int ncodes) {
     int ufd = open("/dev/uinput", O_WRONLY | O_CLOEXEC);
     if (ufd < 0) {
-        log_errno("打开 /dev/uinput");
+        log_errno("open /dev/uinput");
         return -1;
     }
     if (ioctl(ufd, UI_SET_EVBIT, EV_KEY) < 0 || ioctl(ufd, UI_SET_EVBIT, EV_SYN) < 0) goto fail;
@@ -2487,10 +2487,10 @@ static int create_keyboard(const int *codes, int ncodes) {
     snprintf(setup.name, sizeof setup.name, "StylusCtrl keys");
     if (ioctl(ufd, UI_DEV_SETUP, &setup) < 0 || ioctl(ufd, UI_DEV_CREATE, 0) < 0) goto fail;
     kbd_fd = ufd;
-    log_msg("快捷键设备 StylusCtrl keys");
+    log_msg("shortcut device StylusCtrl keys");
     return 0;
 fail:
-    log_errno("建立快捷键设备");
+    log_errno("create shortcut device");
     close(ufd);
     return -1;
 }
@@ -2636,7 +2636,7 @@ static void resync_pen(struct pen *pen) {
     stamp_ev(&evs[n++], &ts, EV_SYN, SYN_REPORT, 0);
     for (int i = 0; i < n; i++) {
         if (write_all(pen->ufd, &evs[i], sizeof evs[i]) < 0) {
-            log_errno("同步虚拟设备");
+            log_errno("resync virtual device");
             return;
         }
     }
@@ -2665,7 +2665,7 @@ static void forward_packet(struct pen *pen) {
     int n = emit_report(&pen->tool, pen->pkt, in_n, out, MAX_PACKET + 4, prof);
     if (n < 0) {
         pen->n = 0;
-        log_msg("%s 报告写不下，丢掉这一帧", pen->path);
+        log_msg("%s report does not fit, dropping this frame", pen->path);
         return;
     }
     if (prof) n = apply_axes(pen, prof, pen->pkt, in_n, out, n, MAX_PACKET + 4);
@@ -2674,7 +2674,7 @@ static void forward_packet(struct pen *pen) {
     if (pen->ufd < 0) return;
     for (int i = 0; i < n; i++) {
         if (write_all(pen->ufd, &out[i], sizeof out[i]) < 0) {
-            log_errno("写入虚拟设备");
+            log_errno("write virtual device");
             close_pen(pen);
             return;
         }
@@ -2696,17 +2696,17 @@ static void drain(struct pen *pen) {
         if (got < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-            log_msg("%s 断开: %s", pen->path, strerror(errno));
+            log_msg("%s disconnected: %s", pen->path, strerror(errno));
             close_pen(pen);
             return;
         }
         if (got == 0) {
-            log_msg("%s 断开", pen->path);
+            log_msg("%s disconnected", pen->path);
             close_pen(pen);
             return;
         }
         if (got % (ssize_t)sizeof(struct input_event)) {
-            log_msg("%s 读到不完整事件", pen->path);
+            log_msg("%s short read", pen->path);
             close_pen(pen);
             return;
         }
@@ -2723,7 +2723,7 @@ static void drain(struct pen *pen) {
                 continue;
             }
             if (pen->n >= MAX_PACKET) {
-                log_msg("%s 报告过长", pen->path);
+                log_msg("%s report too long", pen->path);
                 pen->n = 0;
                 pen->drop = 1;
                 continue;
@@ -2783,7 +2783,7 @@ static void drain_hid(struct pen *pen) {
         if (got < 0) {
             if (errno == EINTR) continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
-            log_msg("%s 的 hidraw 断开: %s", pen->path, strerror(errno));
+            log_msg("%s hidraw closed: %s", pen->path, strerror(errno));
             close_hid(pen);
             return;
         }
@@ -2835,20 +2835,20 @@ static int open_pen_hidraw(struct pen *pen) {
     snprintf(dev, sizeof dev, "/dev/%s", node);
     int fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) {
-        log_msg("打开 %s 失败: %s", dev, strerror(errno));
+        log_msg("open %s failed: %s", dev, strerror(errno));
         return -1;
     }
     struct hidraw_report_descriptor rdesc;
     memset(&rdesc, 0, sizeof rdesc);
     rdesc.size = HID_MAX_DESCRIPTOR_SIZE;
     if (ioctl(fd, HIDIOCGRDESC, &rdesc) < 0 || rdesc.size == 0 || rdesc.size > HID_MAX_DESCRIPTOR_SIZE) {
-        log_msg("%s 读不到报告描述符: %s", dev, strerror(errno));
+        log_msg("%s report descriptor unreadable: %s", dev, strerror(errno));
         close(fd);
         return -1;
     }
     struct invert_map map;
     if (parse_invert_map(rdesc.value, (int)rdesc.size, &map) != 0) {
-        log_msg("%s 的描述符里没有 Invert", dev);
+        log_msg("%s descriptor has no Invert usage", dev);
         close(fd);
         return -1;
     }
@@ -2858,7 +2858,7 @@ static int open_pen_hidraw(struct pen *pen) {
     pen->inrange_bit = map.inrange_bit;
     pen->tool.invert_known = 1;
     pen->tool.invert_down = 0;
-    log_msg("%s 第二侧键读 HID Invert，报告 %d，位 %d", pen->path, map.report_id, map.invert_bit);
+    log_msg("%s second button from HID Invert, report %d, bit %d", pen->path, map.report_id, map.invert_bit);
     return 0;
 }
 
@@ -2928,7 +2928,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         return;
     }
     if (ioctl(fd, EVIOCGRAB, 1) < 0) {
-        log_msg("独占 %s 失败: %s", path, strerror(errno));
+        log_msg("grab %s failed: %s", path, strerror(errno));
         close(fd);
         return;
     }
@@ -2965,7 +2965,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     char node[64];
     if (uinput_sysname(pen->ufd, sysname, sizeof sysname) == 0) event_node(sysname, node, sizeof node);
     else snprintf(node, sizeof node, "uinput");
-    log_msg("%s独占 %s「%s」，虚拟设备 %s，x %d-%d，y %d-%d，pressure %d-%d", builtin ? "内屏 " : "", path,
+    log_msg("%sgrabbed %s \"%s\", virtual %s, x %d-%d, y %d-%d, pressure %d-%d", builtin ? "internal " : "", path,
             source, node,
             axes[0].info.minimum, axes[0].info.maximum, axes[1].info.minimum, axes[1].info.maximum,
             axes[2].info.minimum, axes[2].info.maximum);
@@ -2974,7 +2974,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
 static void scan(struct pen *pens, int *npens) {
     DIR *dir = opendir("/dev/input");
     if (!dir) {
-        log_errno("打开 /dev/input");
+        log_errno("open /dev/input");
         return;
     }
     struct dirent *ent;
@@ -2988,8 +2988,8 @@ static void scan(struct pen *pens, int *npens) {
 }
 
 static void log_waiting(void) {
-    if (cfg_loaded && cfg.has_match) log_msg("等待 %04x:%04x 的笔节点", cfg.vendor, cfg.product);
-    else log_msg("等待带 INPUT_PROP_POINTER 和 ABS_PRESSURE 的笔节点");
+    if (cfg_loaded && cfg.has_match) log_msg("waiting for pen %04x:%04x", cfg.vendor, cfg.product);
+    else log_msg("waiting for a pen with INPUT_PROP_POINTER and ABS_PRESSURE");
 }
 
 static void reload_config(struct pen *pens, int *npens) {
@@ -3003,7 +3003,7 @@ static void reload_config(struct pen *pens, int *npens) {
                 char path[64];
                 snprintf(path, sizeof path, "%s", pens[i].path);
                 close_pen(&pens[i]);
-                log_msg("已放开 %s", path);
+                log_msg("released %s", path);
                 pens[i] = pens[*npens - 1];
                 (*npens)--;
             }
@@ -3012,7 +3012,7 @@ static void reload_config(struct pen *pens, int *npens) {
             if (pens[i].fd < 0 || pens[i].idc_on == cfg_loaded) continue;
             if (open_virtual(&pens[i]) == 0) {
                 resync_pen(&pens[i]);
-                log_msg("已按配置重建 %s", pens[i].path);
+                log_msg("rebuilt %s from config", pens[i].path);
             }
         }
         scan(pens, npens);
@@ -3027,11 +3027,11 @@ static int open_input_watch(void) {
         return -1;
     }
     if (inotify_add_watch(fd, "/dev/input", IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM) < 0) {
-        log_errno("监听 /dev/input");
+        log_errno("watch /dev/input");
         close(fd);
         return -1;
     }
-    log_msg("监听 /dev/input");
+    log_msg("watching /dev/input");
     return fd;
 }
 
@@ -3126,7 +3126,7 @@ static int run_daemon(void) {
                         if (held_rubber && pens[i].tool.phys_rubber)
                             release_chord(&held_rubber, view.rubber_keys, view.rubber_nkeys);
                     }
-                    log_msg("已放开 %s", pens[i].path);
+                    log_msg("released %s", pens[i].path);
                     pens[i] = pens[npens - 1];
                     npens--;
                 }
@@ -3140,7 +3140,7 @@ static int run_daemon(void) {
         if (now_ms() - config_check_ms >= 1000) {
             config_check_ms = now_ms();
             if (config_time_changed()) {
-                log_msg("配置文件有变化");
+                log_msg("config changed");
                 reload_config(pens, &npens);
                 remember_config_time();
             }
@@ -3162,14 +3162,14 @@ static int run_daemon(void) {
         char path[64];
         snprintf(path, sizeof path, "%s", pens[i].path);
         close_pen(&pens[i]);
-        log_msg("已放开 %s", path);
+        log_msg("released %s", path);
     }
     if (kbd_fd >= 0) {
         ioctl(kbd_fd, UI_DEV_DESTROY);
         close(kbd_fd);
         kbd_fd = -1;
     }
-    log_msg("退出");
+    log_msg("exit");
     return 0;
 }
 

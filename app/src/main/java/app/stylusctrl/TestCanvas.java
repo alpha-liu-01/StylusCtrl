@@ -1,6 +1,7 @@
 package app.stylusctrl;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.util.AttributeSet;
@@ -9,39 +10,56 @@ import android.view.View;
 
 import com.google.android.material.color.MaterialColors;
 
-import java.util.ArrayList;
-import java.util.List;
-
 /** A drawing surface that is not inside a scrolling parent, so a stroke is not cancelled. */
 public class TestCanvas extends View {
     public interface SampleListener {
         void onSample(String text);
     }
 
-    private static final class Segment {
-        float x0, y0, x1, y1, width;
-    }
-
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final List<Segment> segments = new ArrayList<>();
     private SampleListener listener;
+    private Bitmap ink;
+    private Canvas inkCanvas;
     private float lastX;
     private float lastY;
     private boolean drawing;
-    private int ink;
 
     public TestCanvas(Context context, AttributeSet attrs) {
         super(context, attrs);
-        ink = MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary, 0xFF1B6B66);
+        int inkColor = MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary, 0xFF1B6B66);
         int paper = MaterialColors.getColor(this, com.google.android.material.R.attr.colorSurfaceVariant, 0xFFF4F1EA);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setColor(ink);
+        paint.setColor(inkColor);
         setBackgroundColor(paper);
     }
 
     public void setSampleListener(SampleListener listener) {
         this.listener = listener;
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        if (w <= 0 || h <= 0) return;
+        Bitmap next = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(next);
+        if (ink != null) {
+            canvas.drawBitmap(ink, 0, 0, null);
+            ink.recycle();
+        }
+        ink = next;
+        inkCanvas = canvas;
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        if (ink != null) {
+            ink.recycle();
+            ink = null;
+            inkCanvas = null;
+        }
     }
 
     @Override
@@ -59,42 +77,41 @@ public class TestCanvas extends View {
         if (!drawing) return false;
         if (action == MotionEvent.ACTION_MOVE) {
             int history = event.getHistorySize();
-            for (int i = 0; i < history; i++) addSegment(event.getHistoricalX(i), event.getHistoricalY(i), event.getHistoricalPressure(i));
+            for (int i = 0; i < history; i++) {
+                addSegment(event.getHistoricalX(i), event.getHistoricalY(i), event.getHistoricalPressure(i));
+            }
             addSegment(event.getX(), event.getY(), event.getPressure());
-            report(event);
             invalidate();
+            report(event);
             return true;
         }
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             if (action == MotionEvent.ACTION_UP) addSegment(event.getX(), event.getY(), event.getPressure());
             drawing = false;
             getParent().requestDisallowInterceptTouchEvent(false);
-            report(event);
             invalidate();
+            report(event);
             return true;
         }
         return false;
     }
 
     private void addSegment(float x, float y, float pressure) {
-        Segment segment = new Segment();
-        segment.x0 = lastX;
-        segment.y0 = lastY;
-        segment.x1 = x;
-        segment.y1 = y;
-        segment.width = 2f + Math.max(0f, pressure) * 22f;
-        segments.add(segment);
-        if (segments.size() > 4000) segments.remove(0);
+        if (inkCanvas == null) {
+            lastX = x;
+            lastY = y;
+            return;
+        }
+        float width = 2f + Math.max(0f, pressure) * 22f;
+        paint.setStrokeWidth(width);
+        inkCanvas.drawLine(lastX, lastY, x, y, paint);
         lastX = x;
         lastY = y;
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
-        for (Segment segment : segments) {
-            paint.setStrokeWidth(segment.width);
-            canvas.drawLine(segment.x0, segment.y0, segment.x1, segment.y1, paint);
-        }
+        if (ink != null) canvas.drawBitmap(ink, 0, 0, null);
     }
 
     private void report(MotionEvent event) {

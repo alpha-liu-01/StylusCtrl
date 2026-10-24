@@ -209,6 +209,6 @@ Android 16 若因为 ioctl 的 neverallow 编不过，先在 `stylusctrl.te` 加
 
 1. `ls -l /dev/uinput` 存在。
 2. 安装 apk，打开内屏页，打开抓取，保存。
-3. `logcat -s stylusctld` 或进程的 stderr 里有「内屏 独占」和 `hid-over-i2c 2D1F:0036 Stylus`。
+3. `logcat -s stylusctld` 或进程的 stderr 里有 `internal grabbed` 和 `hid-over-i2c 2D1F:0036 Stylus`。
 4. `dumpsys input` 里虚拟设备是 `DIRECT`，配置文件是 `Vendor_2d1f_Product_0036.idc`，手指的 Elan 还在。
 5. 只用电笔尖、按键 1、按键 2 各画一下。压感曲线改的是 `ABS_PRESSURE`。按键 1 走第一侧键，按键 2 走橡皮位。

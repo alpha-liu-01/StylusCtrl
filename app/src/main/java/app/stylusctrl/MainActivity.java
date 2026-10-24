@@ -225,12 +225,16 @@ public class MainActivity extends AppCompatActivity {
         }
         showProfile(profile);
         if (snap.local) {
-            String screen = screenW > 0 ? getString(R.string.screen_size, screenW, screenH) : "";
-            statusPrefix = getString(R.string.local_config);
-            status.setText(statusPrefix + screen);
-            if (parsed) pageSub.setText(R.string.local_config);
+            if (parsed) {
+                pageSub.setText("");
+                pageSub.setVisibility(View.GONE);
+            }
+            String screen = screenW > 0 ? getString(R.string.screen_size, screenW, screenH).trim() : "";
+            statusPrefix = screen;
+            status.setText(screen);
             return;
         }
+        pageSub.setVisibility(View.VISIBLE);
         String daemon = snap.daemonPid == null || snap.daemonPid.isEmpty()
                 ? getString(R.string.daemon_stopped)
                 : getString(R.string.daemon_pid, snap.daemonPid);
@@ -607,11 +611,18 @@ public class MainActivity extends AppCompatActivity {
         if (!keysOk(profile.external, getString(R.string.pen_external))
                 || !keysOk(profile.internal, getString(R.string.pen_internal))) return;
         String json = profile.toJson();
-        pageSub.setText(R.string.writing);
+        if (haveRoot) pageSub.setText(R.string.writing);
         io.execute(() -> {
             String code = RootStore.write(MainActivity.this, json);
             runOnUiThread(() -> {
                 String message = writeMessage(code);
+                if (!haveRoot) {
+                    pageSub.setText("");
+                    pageSub.setVisibility(View.GONE);
+                    Snackbar.make(root, message, Snackbar.LENGTH_LONG).show();
+                    return;
+                }
+                pageSub.setVisibility(View.VISIBLE);
                 pageSub.setText(message);
                 Snackbar.make(root, message, Snackbar.LENGTH_LONG).show();
                 status.setText(message + "\n\n" + status.getText());
