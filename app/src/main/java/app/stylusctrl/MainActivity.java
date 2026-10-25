@@ -69,6 +69,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
+        applyStatusBar();
         root = findViewById(R.id.root);
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -101,6 +102,7 @@ public class MainActivity extends AppCompatActivity {
         TestCanvas canvas = testPage.findViewById(R.id.canvas);
         TextView sample = testPage.findViewById(R.id.sample);
         canvas.setSampleListener(sample::setText);
+        testPage.findViewById(R.id.clear_canvas).setOnClickListener(v -> canvas.clear());
 
         board.setListener(this::onBoardChanged);
         curve.setListener(xy -> {
@@ -165,7 +167,15 @@ public class MainActivity extends AppCompatActivity {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        applyStatusBar();
         root.post(this::applyWindowSize);
+    }
+
+    /** Dark icons on a light bar, light icons on a dark bar. uiMode does not recreate this activity. */
+    private void applyStatusBar() {
+        int night = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        WindowCompat.getInsetsController(getWindow(), getWindow().getDecorView())
+                .setAppearanceLightStatusBars(night != Configuration.UI_MODE_NIGHT_YES);
     }
 
     @Override

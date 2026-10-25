@@ -15,6 +15,14 @@
         android:text="@string/test_hint"
         android:textAppearance="?attr/textAppearanceBodyLarge" />
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/clear_canvas"
+        style="@style/Widget.Material3.Button.TonalButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/clear_canvas" />
+
     <app.stylusctrl.TestCanvas
         android:id="@+id/canvas"
         android:layout_width="match_parent"

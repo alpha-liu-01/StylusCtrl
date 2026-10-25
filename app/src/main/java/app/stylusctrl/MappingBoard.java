@@ -406,9 +406,14 @@ public class MappingBoard extends View {
         return NONE;
     }
 
-    /** Landscape puts the outer corners against the bezel. Keep a finger's width clear of each side. */
+    /** Outer corners sit on the bezel: the sides in landscape, the bottom in portrait. */
     private float sideInset() {
         if (getResources().getConfiguration().orientation != Configuration.ORIENTATION_LANDSCAPE) return 0f;
+        return dp(48);
+    }
+
+    private float bottomInset() {
+        if (getResources().getConfiguration().orientation != Configuration.ORIENTATION_PORTRAIT) return 0f;
         return dp(48);
     }
 
@@ -419,7 +424,7 @@ public class MappingBoard extends View {
         float left = getPaddingLeft() + side;
         float top = getPaddingTop();
         float right = getWidth() - getPaddingRight() - side;
-        float bottom = getHeight() - getPaddingBottom();
+        float bottom = getHeight() - getPaddingBottom() - bottomInset();
         float w = Math.max(1f, right - left);
         float h = Math.max(1f, bottom - top);
         boolean row = w >= h;

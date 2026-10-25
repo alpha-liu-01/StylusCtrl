@@ -3,6 +3,7 @@ package app.stylusctrl;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Paint;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
@@ -36,6 +37,12 @@ public class TestCanvas extends View {
 
     public void setSampleListener(SampleListener listener) {
         this.listener = listener;
+    }
+
+    public void clear() {
+        drawing = false;
+        if (ink != null) ink.eraseColor(Color.TRANSPARENT);
+        invalidate();
     }
 
     @Override
