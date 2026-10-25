@@ -46,6 +46,8 @@
     <string name="mapping_hint">左是数位板，右是屏幕。板子方向和裁切、矩形可以一起用。屏幕转到另一个方向时，右边的比例会马上跟着变。</string>
 
     <string name="device_loading">正在读取…</string>
+    <string name="load_config">加载配置</string>
+    <string name="config_loaded">已加载。守护进程会重读这份文件。</string>
     <string name="test_hint">在下面画一笔。这里不跟页面滚动抢触控。</string>
     <string name="clear_canvas">复位</string>
 

@@ -3,6 +3,7 @@ package app.stylusctrl;
 import android.content.res.Configuration;
 import android.graphics.Point;
 import android.graphics.Rect;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Display;
@@ -11,6 +12,8 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.TextView;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -24,6 +27,10 @@ import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.navigationrail.NavigationRailView;
 import com.google.android.material.snackbar.Snackbar;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -63,6 +70,8 @@ public class MainActivity extends AppCompatActivity {
     private long externalGoneAt = -1;
     private static final long EXTERNAL_GAP_MS = 4000;
     private String statusPrefix = "";
+    private final ActivityResultLauncher<String[]> openConfig =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::importConfig);
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -99,6 +108,8 @@ public class MainActivity extends AppCompatActivity {
         curve = pressurePage.findViewById(R.id.curve);
         curveReadout = pressurePage.findViewById(R.id.curve_readout);
         status = devicePage.findViewById(R.id.status);
+        devicePage.findViewById(R.id.load_config).setOnClickListener(v ->
+                openConfig.launch(new String[] {"application/json", "text/plain", "*/*"}));
         TestCanvas canvas = testPage.findViewById(R.id.canvas);
         TextView sample = testPage.findViewById(R.id.sample);
         canvas.setSampleListener(sample::setText);
@@ -360,6 +371,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void showProfile(Profile p) {
+        RootStore.useProfile(p);
         filling = true;
         board.setAxes(tabletMaxX, tabletMaxY, screenW, screenH);
         board.setRotation(p.rotation);
@@ -679,6 +691,49 @@ public class MainActivity extends AppCompatActivity {
                 if (haveRoot) status.setText(message + "\n\n" + status.getText());
             });
         });
+    }
+
+    private void importConfig(Uri uri) {
+        if (uri == null) return;
+        io.execute(() -> {
+            String text;
+            try {
+                text = readUri(uri);
+            } catch (IOException e) {
+                text = null;
+            }
+            String body = text;
+            if (body == null) {
+                runOnUiThread(() -> Snackbar.make(root, R.string.write_failed, Snackbar.LENGTH_LONG).show());
+                return;
+            }
+            try {
+                Profile.parse(body);
+            } catch (Exception e) {
+                runOnUiThread(() -> Snackbar.make(root, R.string.config_parse_failed, Snackbar.LENGTH_LONG).show());
+                return;
+            }
+            String code = RootStore.write(MainActivity.this, body);
+            runOnUiThread(() -> {
+                boolean ok = "local".equals(code) || "notified".equals(code) || "stopped".equals(code) || "written".equals(code);
+                Snackbar.make(root, ok ? R.string.config_loaded : R.string.write_failed, Snackbar.LENGTH_LONG).show();
+                if (ok) load();
+            });
+        });
+    }
+
+    private String readUri(Uri uri) throws IOException {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            if (in == null) return null;
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            int n;
+            while ((n = in.read(buf)) >= 0) {
+                if (out.size() + n > 65536) return null;
+                out.write(buf, 0, n);
+            }
+            return out.toString(StandardCharsets.UTF_8);
+        }
     }
 
     private String writeMessage(String code) {

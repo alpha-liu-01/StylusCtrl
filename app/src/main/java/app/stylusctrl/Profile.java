@@ -11,6 +11,8 @@ import java.util.Locale;
 public class Profile {
     public String vendor = "0531";
     public String product = "0104";
+    /** Evdev name from getevent. Empty means vendor and product are enough. */
+    public String matchName = "";
     public String mode = "fit";
     public String crop = "center";
     public boolean hasRect;
@@ -31,6 +33,18 @@ public class Profile {
     public Feel external = Feel.tabletDefault();
     public Feel internal = new Feel();
     public boolean internalOn;
+    /** When set, this replaces the built-in sec_e-pen / I2C rule. */
+    public boolean hasInternalMatch;
+    public String internalName = "";
+    public String internalPrefix = "";
+    public String internalVendor = "";
+    public String internalProduct = "";
+    public String internalBus = "";
+    public boolean internalDirectSet;
+    public boolean internalDirect;
+    public boolean internalPenSet;
+    public boolean internalPen;
+    public boolean internalMultitouch;
 
     /** Pressure curve and side buttons for one pen. Mapping is not part of this. */
     public static final class Feel {
@@ -72,6 +86,7 @@ public class Profile {
         if (match != null) {
             p.vendor = match.optString("vendor", p.vendor);
             p.product = match.optString("product", p.product);
+            p.matchName = match.optString("name", "");
         }
         JSONObject mapping = root.optJSONObject("mapping");
         if (mapping != null) {
@@ -115,6 +130,7 @@ public class Profile {
         JSONObject internal = root.optJSONObject("internal");
         if (internal != null) {
             p.internalOn = internal.optBoolean("enabled", false);
+            readInternalMatch(internal.optJSONObject("match"), p);
             boolean ownPressure = readFeelPressure(internal.optJSONObject("pressure"), p.internal);
             boolean ownButtons = readFeelButtons(internal.optJSONObject("buttons"), internal.optJSONObject("tools"), p.internal);
             if (!ownPressure) copyPressure(p.external, p.internal);
@@ -123,6 +139,27 @@ public class Profile {
             p.internal.copyFrom(p.external);
         }
         return p;
+    }
+
+    private static void readInternalMatch(JSONObject match, Profile p) {
+        if (match == null) return;
+        p.internalName = match.optString("name", "");
+        p.internalPrefix = match.optString("namePrefix", "");
+        p.internalVendor = match.optString("vendor", "");
+        p.internalProduct = match.optString("product", "");
+        p.internalBus = match.optString("bus", "");
+        if (match.has("direct")) {
+            p.internalDirectSet = true;
+            p.internalDirect = match.optBoolean("direct");
+        }
+        if (match.has("pen")) {
+            p.internalPenSet = true;
+            p.internalPen = match.optBoolean("pen");
+        }
+        if (match.has("multitouch")) p.internalMultitouch = match.optBoolean("multitouch");
+        p.hasInternalMatch = !p.internalName.isEmpty() || !p.internalPrefix.isEmpty() || !p.internalVendor.isEmpty()
+                || !p.internalProduct.isEmpty() || !p.internalBus.isEmpty() || p.internalDirectSet || p.internalPenSet
+                || match.has("multitouch");
     }
 
     private static boolean readFeelPressure(JSONObject pressure, Feel feel) throws Exception {
@@ -202,8 +239,12 @@ public class Profile {
             b.append("  \"display\": { \"width\": ").append(displayW).append(", \"height\": ").append(displayH)
                     .append(", \"rotation\": ").append(displayRotation).append(" },\n");
         }
-        b.append("  \"match\": { \"vendor\": \"").append(vendor).append("\", \"product\": \"")
-                .append(product).append("\" },\n");
+        b.append("  \"match\": { \"vendor\": \"").append(jsonString(vendor)).append("\", \"product\": \"")
+                .append(jsonString(product)).append("\"");
+        if (matchName != null && !matchName.isEmpty()) {
+            b.append(", \"name\": \"").append(jsonString(matchName)).append("\"");
+        }
+        b.append(" },\n");
         b.append("  \"mapping\": { \"mode\": \"").append(mode).append("\", \"crop\": \"")
                 .append(crop).append("\", \"rotation\": ").append(rotation);
         if (hasRect) {
@@ -226,13 +267,54 @@ public class Profile {
         b.append("  \"buttons\": ").append(buttonsJson(external)).append(",\n");
         b.append("  \"tools\": { \"eraserWins\": ").append(external.eraserWins).append(" },\n");
         b.append("  \"internal\": {\n");
-        b.append("    \"enabled\": ").append(internalOn).append(",\n");
+        b.append("    \"enabled\": ").append(internalOn);
+        if (hasInternalMatch) b.append(",\n    \"match\": ").append(internalMatchJson());
+        b.append(",\n");
         b.append("    \"pressure\": ").append(pressureJson(internal)).append(",\n");
         b.append("    \"buttons\": ").append(buttonsJson(internal)).append(",\n");
         b.append("    \"tools\": { \"eraserWins\": ").append(internal.eraserWins).append(" }\n");
         b.append("  }\n");
         b.append("}\n");
         return b.toString();
+    }
+
+    private String internalMatchJson() {
+        StringBuilder b = new StringBuilder();
+        b.append("{ ");
+        boolean comma = false;
+        comma = jsonField(b, comma, "name", internalName);
+        comma = jsonField(b, comma, "namePrefix", internalPrefix);
+        comma = jsonField(b, comma, "vendor", internalVendor);
+        comma = jsonField(b, comma, "product", internalProduct);
+        comma = jsonField(b, comma, "bus", internalBus);
+        if (internalDirectSet) {
+            if (comma) b.append(", ");
+            b.append("\"direct\": ").append(internalDirect);
+            comma = true;
+        }
+        if (internalPenSet) {
+            if (comma) b.append(", ");
+            b.append("\"pen\": ").append(internalPen);
+            comma = true;
+        }
+        if (internalMultitouch) {
+            if (comma) b.append(", ");
+            b.append("\"multitouch\": true");
+        }
+        b.append(" }");
+        return b.toString();
+    }
+
+    private static boolean jsonField(StringBuilder b, boolean comma, String key, String value) {
+        if (value == null || value.isEmpty()) return comma;
+        if (comma) b.append(", ");
+        b.append("\"").append(key).append("\": \"").append(jsonString(value)).append("\"");
+        return true;
+    }
+
+    private static String jsonString(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static String pressureJson(Feel feel) {

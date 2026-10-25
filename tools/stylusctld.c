@@ -36,18 +36,27 @@
 #define BUS_I2C 0x18
 #endif
 
-/* sec_e-pen is Samsung's digitizer. Any other built-in pen is an I2C node
-   with INPUT_PROP_DIRECT, a pen tool, and no multitouch slot. Scarlet's
-   node is "hid-over-i2c 2D1F:0036 Stylus". The sibling without DIRECT is
-   not a pen. A finger screen is DIRECT too, but it has ABS_MT_SLOT.
-   A USB tablet that reports DIRECT is left alone: area mapping for that
-   case is not the internal path. */
+/* Default when the config has no internal.match. sec_e-pen is Samsung's
+   digitizer. Any other built-in pen is an I2C node with INPUT_PROP_DIRECT,
+   a pen tool, and no multitouch slot. Scarlet's node is
+   "hid-over-i2c 2D1F:0036 Stylus". The sibling without DIRECT is not a pen.
+   A finger screen is DIRECT too, but it has ABS_MT_SLOT. A USB tablet that
+   reports DIRECT is left alone unless internal.match names it: area mapping
+   stays on the pointer path. */
 static int is_builtin_pen(const char *name, int direct, int pen_tool, int multitouch, unsigned bustype) {
     if (!name || !strncmp(name, "StylusCtrl", 10)) return 0;
     if (!strcmp(name, "sec_e-pen")) return 1;
     if (!direct || !pen_tool || multitouch) return 0;
     return bustype == BUS_I2C;
 }
+
+/* Bits the source node actually has. The virtual device forwards only these,
+   so a Samsung dock key is not invented for a pen that never reports it. */
+#define RELAY_DISTANCE 0x01
+#define RELAY_HOME 0x02
+#define RELAY_EXTRA 0x04
+#define RELAY_INSERTED 0x08
+#define RELAY_COVER 0x10
 
 /* sec_e-pen reports this key. The header on the build machine has no name for it. */
 #define KEY_SEC_EPEN_EXTRA 0x00fd
@@ -74,7 +83,7 @@ struct tool_state {
     int sent_rubber;
     int sent_stylus2;
     unsigned axes;
-    /* Internal digitizer: also forward distance, the dock switches, and its extra keys. */
+    /* Subset of RELAY_*. Zero unless this node reported that event. */
     int relay;
 };
 
@@ -143,6 +152,22 @@ struct profile {
     int in_stylus_nkeys;
     int in_rubber_keys[8];
     int in_rubber_nkeys;
+    /* When set, this replaces is_builtin_pen. Absent, the built-in rule stays. */
+    int in_match;
+    char in_name[80];
+    char in_prefix[80];
+    int in_saw_vendor;
+    int in_saw_product;
+    unsigned in_vendor;
+    unsigned in_product;
+    int in_saw_bus;
+    unsigned in_bus;
+    int in_saw_direct;
+    int in_direct;
+    int in_saw_pen;
+    int in_pen;
+    int in_multitouch;
+    char match_name[80];
     int disp_w;
     int disp_h;
     int orientation;
@@ -171,17 +196,20 @@ static unsigned axis_bit(int code) {
 
 static int keep_event(const struct tool_state *st, const struct input_event *ev) {
     if (ev->type == EV_ABS) {
-        if (st->relay && ev->code == ABS_DISTANCE) return 1;
+        if ((st->relay & RELAY_DISTANCE) && ev->code == ABS_DISTANCE) return 1;
         unsigned bit = axis_bit(ev->code);
         return bit && (st->axes & bit);
     }
     if (ev->type == EV_KEY) {
         if (ev->code == BTN_TOOL_RUBBER || ev->code == BTN_TOUCH || ev->code == BTN_STYLUS) return 1;
-        if (st->relay && (ev->code == KEY_HOMEPAGE || ev->code == KEY_SEC_EPEN_EXTRA)) return 1;
+        if ((st->relay & RELAY_HOME) && ev->code == KEY_HOMEPAGE) return 1;
+        if ((st->relay & RELAY_EXTRA) && ev->code == KEY_SEC_EPEN_EXTRA) return 1;
         return 0;
     }
-    if (st->relay && ev->type == EV_SW) {
-        return ev->code == SW_PEN_INSERTED || ev->code == SW_MACHINE_COVER;
+    if (ev->type == EV_SW) {
+        if ((st->relay & RELAY_INSERTED) && ev->code == SW_PEN_INSERTED) return 1;
+        if ((st->relay & RELAY_COVER) && ev->code == SW_MACHINE_COVER) return 1;
+        return 0;
     }
     return ev->type == EV_SYN && ev->code == SYN_REPORT;
 }
@@ -276,6 +304,45 @@ static void profile_reset(struct profile *p) {
     p->disp_h = disp_h;
     p->orientation = orientation;
     p->have_display = have_display;
+}
+
+/* internal.match replaces the built-in rule. Without it, sec_e-pen and the
+   I2C direct pen still match, which is the Samsung and Scarlet behavior. */
+static int config_internal(const struct profile *p, const char *name, int direct, int pen_tool, int multitouch,
+                           unsigned bustype, unsigned vendor, unsigned product) {
+    if (!name || !strncmp(name, "StylusCtrl", 10)) return 0;
+    if (!p || !p->in_match) return is_builtin_pen(name, direct, pen_tool, multitouch, bustype);
+    if (multitouch && !p->in_multitouch) return 0;
+    int any = 0;
+    if (p->in_name[0]) {
+        any = 1;
+        if (strcmp(name, p->in_name)) return 0;
+    }
+    if (p->in_prefix[0]) {
+        any = 1;
+        if (strncmp(name, p->in_prefix, strlen(p->in_prefix))) return 0;
+    }
+    if (p->in_saw_vendor) {
+        any = 1;
+        if (vendor != p->in_vendor) return 0;
+    }
+    if (p->in_saw_product) {
+        any = 1;
+        if (product != p->in_product) return 0;
+    }
+    if (p->in_saw_bus) {
+        any = 1;
+        if (bustype != p->in_bus) return 0;
+    }
+    if (p->in_saw_direct) {
+        any = 1;
+        if (direct != p->in_direct) return 0;
+    }
+    if (p->in_saw_pen) {
+        any = 1;
+        if (pen_tool != p->in_pen) return 0;
+    }
+    return any;
 }
 
 static const char *skip_ws(const char *p) {
@@ -489,6 +556,26 @@ static int parse_hex_id(const char *s, unsigned *out) {
     return 0;
 }
 
+static int parse_bus(const char *s, unsigned *out) {
+    if (!strcmp(s, "i2c") || !strcmp(s, "I2C")) {
+        *out = BUS_I2C;
+        return 0;
+    }
+    if (!strcmp(s, "usb") || !strcmp(s, "USB")) {
+        *out = BUS_USB;
+        return 0;
+    }
+    if (!strcmp(s, "bluetooth") || !strcmp(s, "BT")) {
+        *out = 0x05;
+        return 0;
+    }
+    if (!strcmp(s, "spi") || !strcmp(s, "SPI")) {
+        *out = 0x1c;
+        return 0;
+    }
+    return parse_hex_id(s, out);
+}
+
 static int skip_value(const char **pp, int depth);
 
 static int skip_value(const char **pp, int depth) {
@@ -618,6 +705,38 @@ static int apply_string(const char *path, const char *s, struct profile *prof) {
         if (parse_hex_id(s, &prof->product) < 0) return -1;
         prof->saw_product = 1;
         prof->has_match = prof->saw_vendor && prof->saw_product;
+        return 0;
+    }
+    if (!strcmp(path, "match.name")) {
+        snprintf(prof->match_name, sizeof prof->match_name, "%s", s);
+        return 0;
+    }
+    if (!strcmp(path, "internal.match.name")) {
+        snprintf(prof->in_name, sizeof prof->in_name, "%s", s);
+        prof->in_match = 1;
+        return 0;
+    }
+    if (!strcmp(path, "internal.match.namePrefix")) {
+        snprintf(prof->in_prefix, sizeof prof->in_prefix, "%s", s);
+        prof->in_match = 1;
+        return 0;
+    }
+    if (!strcmp(path, "internal.match.vendor")) {
+        if (parse_hex_id(s, &prof->in_vendor) < 0) return -1;
+        prof->in_saw_vendor = 1;
+        prof->in_match = 1;
+        return 0;
+    }
+    if (!strcmp(path, "internal.match.product")) {
+        if (parse_hex_id(s, &prof->in_product) < 0) return -1;
+        prof->in_saw_product = 1;
+        prof->in_match = 1;
+        return 0;
+    }
+    if (!strcmp(path, "internal.match.bus")) {
+        if (parse_bus(s, &prof->in_bus) < 0) return -1;
+        prof->in_saw_bus = 1;
+        prof->in_match = 1;
         return 0;
     }
     if (!strcmp(local, "buttons.BTN_STYLUS.action")) {
@@ -809,7 +928,7 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
     if (*p == '{') return parse_object(pp, path, prof);
     if (*p == '[') return parse_array(pp, path, prof);
     if (*p == '"') {
-        char text[64];
+        char text[80];
         if (scan_string(&p, text, sizeof text) < 0) return -1;
         if (apply_string(path, text, prof) < 0) return -1;
         *pp = p;
@@ -822,6 +941,20 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
             prof->in_eraser_wins = 1;
         }
         if (!strcmp(path, "internal.enabled")) prof->internal_on = 1;
+        if (!strcmp(path, "internal.match.direct")) {
+            prof->in_saw_direct = 1;
+            prof->in_direct = 1;
+            prof->in_match = 1;
+        }
+        if (!strcmp(path, "internal.match.pen")) {
+            prof->in_saw_pen = 1;
+            prof->in_pen = 1;
+            prof->in_match = 1;
+        }
+        if (!strcmp(path, "internal.match.multitouch")) {
+            prof->in_multitouch = 1;
+            prof->in_match = 1;
+        }
         *pp = p + 4;
         return 0;
     }
@@ -832,6 +965,20 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
             prof->in_eraser_wins = 0;
         }
         if (!strcmp(path, "internal.enabled")) prof->internal_on = 0;
+        if (!strcmp(path, "internal.match.direct")) {
+            prof->in_saw_direct = 1;
+            prof->in_direct = 0;
+            prof->in_match = 1;
+        }
+        if (!strcmp(path, "internal.match.pen")) {
+            prof->in_saw_pen = 1;
+            prof->in_pen = 0;
+            prof->in_match = 1;
+        }
+        if (!strcmp(path, "internal.match.multitouch")) {
+            prof->in_multitouch = 0;
+            prof->in_match = 1;
+        }
         *pp = p + 5;
         return 0;
     }
@@ -1725,6 +1872,23 @@ static void test_display_config(void) {
     expect("mode stretch", kept.mode, MODE_STRETCH);
 }
 
+static void test_device_match(void) {
+    struct profile p;
+    memset(&p, 0, sizeof p);
+    profile_reset(&p);
+    expect("default samsung", config_internal(&p, "sec_e-pen", 0, 0, 0, 0, 0, 0), 1);
+    expect("default scarlet", config_internal(&p, "hid-over-i2c 2D1F:0036 Stylus", 1, 1, 0, BUS_I2C, 0, 0), 1);
+    expect("default usb direct", config_internal(&p, "Wacom Tablet", 1, 1, 0, BUS_USB, 0, 0), 0);
+    const char *text =
+        "{\"internal\":{\"match\":{\"name\":\"Wacom Tablet\",\"bus\":\"usb\",\"direct\":true}},"
+        "\"match\":{\"name\":\"Pen Tablet\"}}";
+    expect("match config", parse_config(text, &p), 0);
+    expect("named usb", config_internal(&p, "Wacom Tablet", 1, 1, 0, BUS_USB, 0, 0), 1);
+    expect("samsung not in this match", config_internal(&p, "sec_e-pen", 0, 0, 0, 0, 0, 0), 0);
+    expect("finger still out", config_internal(&p, "Wacom Tablet", 1, 0, 1, BUS_USB, 0, 0), 0);
+    expect("saved name", strcmp(p.match_name, "Pen Tablet") == 0, 1);
+}
+
 static void test_vname(void) {
     char name[80];
     format_vname(name, 80, 0, 15200, 0, 9500, "Wacom Co.,Ltd. Wacom One pen tablet small");
@@ -1743,7 +1907,8 @@ static void test_builtin_pen(void) {
 }
 
 static void test_relay_dock(void) {
-    struct tool_state st = {.axes = AXIS_ALL, .relay = 1};
+    struct tool_state st = {.axes = AXIS_ALL,
+                            .relay = RELAY_DISTANCE | RELAY_HOME | RELAY_EXTRA | RELAY_INSERTED};
     struct input_event sw;
     memset(&sw, 0, sizeof sw);
     sw.type = EV_SW;
@@ -1775,6 +1940,7 @@ int main(void) {
     test_internal_feel();
     test_relay_dock();
     test_display_config();
+    test_device_match();
     test_vname();
     test_builtin_pen();
     if (failures) {
@@ -1913,16 +2079,15 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
     for (int i = 0; i < 5; i++) {
         if (ioctl(ufd, UI_SET_KEYBIT, keys[i]) < 0) goto fail;
     }
-    /* Grabbing sec_e-pen swallows the dock, the cover, and hover distance.
-       Put those back on the virtual device unchanged. Other direct pens,
-       such as Scarlet's i2c stylus, do not carry those events. */
-    if (relay) {
+    /* Only events this node already reports. A pen without a dock switch
+       does not grow one on the virtual device. */
+    if (relay & (RELAY_INSERTED | RELAY_COVER)) {
         if (ioctl(ufd, UI_SET_EVBIT, EV_SW) < 0) goto fail;
-        if (ioctl(ufd, UI_SET_KEYBIT, KEY_HOMEPAGE) < 0) goto fail;
-        if (ioctl(ufd, UI_SET_KEYBIT, KEY_SEC_EPEN_EXTRA) < 0) goto fail;
-        if (ioctl(ufd, UI_SET_SWBIT, SW_PEN_INSERTED) < 0) goto fail;
-        if (ioctl(ufd, UI_SET_SWBIT, SW_MACHINE_COVER) < 0) goto fail;
     }
+    if ((relay & RELAY_HOME) && ioctl(ufd, UI_SET_KEYBIT, KEY_HOMEPAGE) < 0) goto fail;
+    if ((relay & RELAY_EXTRA) && ioctl(ufd, UI_SET_KEYBIT, KEY_SEC_EPEN_EXTRA) < 0) goto fail;
+    if ((relay & RELAY_INSERTED) && ioctl(ufd, UI_SET_SWBIT, SW_PEN_INSERTED) < 0) goto fail;
+    if ((relay & RELAY_COVER) && ioctl(ufd, UI_SET_SWBIT, SW_MACHINE_COVER) < 0) goto fail;
     for (int i = 0; i < naxes; i++) {
         if (!axes[i].present) continue;
         if (ioctl(ufd, UI_SET_ABSBIT, axes[i].code) < 0) goto fail;
@@ -2157,6 +2322,8 @@ static void log_profile(void) {
     if (cfg.rotation) log_msg("tablet rotation %d", cfg.rotation * 90);
     if (cfg.have_display) log_msg("display %dx%d, rotation %d", cfg.disp_w, cfg.disp_h, cfg.orientation);
     if (cfg.has_match) log_msg("match %04x:%04x only", cfg.vendor, cfg.product);
+    if (cfg.match_name[0]) log_msg("match name %s", cfg.match_name);
+    if (cfg.in_match) log_msg("internal match loaded");
     if (cfg.curve_n) log_msg("pressure curve loaded");
     if (cfg.in_ready) {
         log_msg("internal profile, stylus %s, eraser %s, deadzone %.2f-%.2f", stylus_word(cfg.in_stylus_action),
@@ -2848,15 +3015,16 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         close(fd);
         return;
     }
-    int samsung = strcmp(source, "sec_e-pen") == 0;
-    int builtin = is_builtin_pen(source, bit_is_set(prop, INPUT_PROP_DIRECT), bit_is_set(keybits, BTN_TOOL_PEN),
-                                 bit_is_set(absbits, ABS_MT_SLOT), id.bustype);
+    int direct = bit_is_set(prop, INPUT_PROP_DIRECT);
+    int pen_tool = bit_is_set(keybits, BTN_TOOL_PEN);
+    int multitouch = bit_is_set(absbits, ABS_MT_SLOT);
+    int builtin = config_internal(&cfg, source, direct, pen_tool, multitouch, id.bustype, id.vendor, id.product);
     if (builtin) {
         if (!cfg_loaded || !cfg.internal_on) {
             close(fd);
             return;
         }
-    } else if (!bit_is_set(prop, INPUT_PROP_POINTER) || bit_is_set(prop, INPUT_PROP_DIRECT)) {
+    } else if (!bit_is_set(prop, INPUT_PROP_POINTER) || direct) {
         close(fd);
         return;
     }
@@ -2870,7 +3038,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     memset(axes, 0, sizeof axes);
     unsigned mask = 0;
     for (int i = 0; i < 6; i++) {
-        if (codes[i] == ABS_DISTANCE && !builtin) continue;
+        if (codes[i] == ABS_DISTANCE && !bit_is_set(absbits, ABS_DISTANCE)) continue;
         axes[i].code = codes[i];
         if (!bit_is_set(absbits, codes[i])) continue;
         if (ioctl(fd, EVIOCGABS(codes[i]), &axes[i].info) < 0) {
@@ -2881,7 +3049,9 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         axes[i].present = 1;
         mask |= axis_bit(codes[i]);
     }
-    if (!builtin && cfg_loaded && cfg.has_match && (id.vendor != cfg.vendor || id.product != cfg.product)) {
+    if (!builtin && cfg_loaded &&
+        ((cfg.saw_vendor && id.vendor != cfg.vendor) || (cfg.saw_product && id.product != cfg.product) ||
+         (cfg.match_name[0] && strcmp(source, cfg.match_name)))) {
         close(fd);
         return;
     }
@@ -2896,7 +3066,16 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     pen->hid_fd = -1;
     pen->ufd = -1;
     pen->direct = builtin;
-    pen->tool.relay = samsung;
+    unsigned long swbits[2];
+    memset(swbits, 0, sizeof swbits);
+    ioctl(fd, EVIOCGBIT(EV_SW, sizeof swbits), swbits);
+    int relay = 0;
+    if (bit_is_set(absbits, ABS_DISTANCE)) relay |= RELAY_DISTANCE;
+    if (bit_is_set(keybits, KEY_HOMEPAGE)) relay |= RELAY_HOME;
+    if (bit_is_set(keybits, KEY_SEC_EPEN_EXTRA)) relay |= RELAY_EXTRA;
+    if (bit_is_set(swbits, SW_PEN_INSERTED)) relay |= RELAY_INSERTED;
+    if (bit_is_set(swbits, SW_MACHINE_COVER)) relay |= RELAY_COVER;
+    pen->tool.relay = relay;
     pen->tool.axes = mask;
     memcpy(pen->axes, axes, sizeof axes);
     pen->id = id;

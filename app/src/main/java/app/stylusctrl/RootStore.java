@@ -26,7 +26,14 @@ import java.util.regex.Pattern;
 public final class RootStore {
     public static final String CONFIG_PATH = "/data/adb/stylusctrl/config.json";
 
+    /** The profile the screen is showing. Device classification uses its match rules. */
+    private static Profile shown;
+
     private RootStore() {}
+
+    public static void useProfile(Profile profile) {
+        shown = profile;
+    }
 
     public static final class Pen {
         public String name = "";
@@ -71,6 +78,7 @@ public final class RootStore {
             if (!snap.root) {
                 snap.local = true;
                 snap.configText = readLocal(context);
+                rememberProfile(snap.configText);
                 readInputDevices(context, snap);
                 readScreen(context, snap);
                 return snap;
@@ -81,6 +89,7 @@ public final class RootStore {
                 byte[] raw = Base64.decode(b64, Base64.DEFAULT);
                 snap.configText = new String(raw, StandardCharsets.UTF_8);
             }
+            rememberProfile(snap.configText);
             Shell.Result pid = Shell.cmd("pidof stylusctld || true").exec();
             snap.daemonPid = pid.getOut().isEmpty() ? "" : pid.getOut().get(0).trim();
             Shell.Result ev = Shell.cmd(DEVICE_CMD).exec();
@@ -275,22 +284,82 @@ public final class RootStore {
         return out;
     }
 
-    /** Same rule as stylusctld is_builtin_pen. An empty bus falls back to the i2c-hid name. */
+    /** Same rule as stylusctld. internal.match in the open profile replaces the built-in rule. */
     static void classify(Pen pen) {
         boolean builtin = false;
         if (!pen.name.startsWith("StylusCtrl")) {
-            if ("sec_e-pen".equals(pen.name)) {
-                builtin = true;
-            } else if (pen.direct && pen.penTool && pen.pressure && !pen.multitouch && penHasAxes(pen)) {
-                String bus = pen.bustype == null ? "" : pen.bustype.trim().toLowerCase(Locale.US);
-                if (bus.startsWith("0x")) bus = bus.substring(2);
-                if (bus.isEmpty()) builtin = pen.name.startsWith("hid-over-i2c ");
-                else builtin = "18".equals(bus) || "0018".equals(bus);
-            }
+            if (shown != null && shown.hasInternalMatch) builtin = configuredInternal(pen, shown);
+            else builtin = heuristicInternal(pen);
         }
         pen.internal = builtin;
         pen.external = pen.pointer && !pen.direct && pen.pressure && penHasAxes(pen)
                 && !pen.name.startsWith("StylusCtrl") && !builtin;
+    }
+
+    private static boolean heuristicInternal(Pen pen) {
+        if ("sec_e-pen".equals(pen.name)) return true;
+        if (!(pen.direct && pen.penTool && pen.pressure && !pen.multitouch && penHasAxes(pen))) return false;
+        String bus = pen.bustype == null ? "" : pen.bustype.trim().toLowerCase(Locale.US);
+        if (bus.startsWith("0x")) bus = bus.substring(2);
+        if (bus.isEmpty()) return pen.name.startsWith("hid-over-i2c ");
+        return "18".equals(bus) || "0018".equals(bus);
+    }
+
+    private static boolean configuredInternal(Pen pen, Profile profile) {
+        if (pen.multitouch && !profile.internalMultitouch) return false;
+        boolean any = false;
+        if (!profile.internalName.isEmpty()) {
+            any = true;
+            if (!pen.name.equals(profile.internalName)) return false;
+        }
+        if (!profile.internalPrefix.isEmpty()) {
+            any = true;
+            if (!pen.name.startsWith(profile.internalPrefix)) return false;
+        }
+        if (!profile.internalVendor.isEmpty()) {
+            any = true;
+            if (!hex4(profile.internalVendor).equals(pen.vendor)) return false;
+        }
+        if (!profile.internalProduct.isEmpty()) {
+            any = true;
+            if (!hex4(profile.internalProduct).equals(pen.product)) return false;
+        }
+        if (!profile.internalBus.isEmpty()) {
+            any = true;
+            if (!busMatches(pen, profile.internalBus)) return false;
+        }
+        if (profile.internalDirectSet) {
+            any = true;
+            if (pen.direct != profile.internalDirect) return false;
+        }
+        if (profile.internalPenSet) {
+            any = true;
+            if (pen.penTool != profile.internalPen) return false;
+        }
+        return any;
+    }
+
+    private static boolean busMatches(Pen pen, String want) {
+        String bus = want.trim().toLowerCase(Locale.US);
+        String have = pen.bustype == null ? "" : pen.bustype.trim().toLowerCase(Locale.US);
+        if (have.startsWith("0x")) have = have.substring(2);
+        if ("i2c".equals(bus)) {
+            if (have.isEmpty()) return pen.name.startsWith("hid-over-i2c ");
+            return "18".equals(have) || "0018".equals(have);
+        }
+        if ("usb".equals(bus)) return "3".equals(have) || "03".equals(have) || "0003".equals(have);
+        if ("bluetooth".equals(bus) || "bt".equals(bus)) return "5".equals(have) || "05".equals(have) || "0005".equals(have);
+        if ("spi".equals(bus)) return "1c".equals(have) || "001c".equals(have);
+        if (bus.startsWith("0x")) bus = bus.substring(2);
+        return !have.isEmpty() && (have.equals(bus) || have.replaceFirst("^0+", "").equals(bus.replaceFirst("^0+", "")));
+    }
+
+    private static void rememberProfile(String text) {
+        if (text == null || text.isEmpty()) return;
+        try {
+            shown = Profile.parse(text);
+        } catch (Exception ignored) {
+        }
     }
 
     private static boolean penHasAxes(Pen pen) {

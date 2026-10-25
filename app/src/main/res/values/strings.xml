@@ -52,6 +52,8 @@
     <string name="mapping_hint">Left is the tablet, right is the screen. Tablet rotation can be combined with the crop and the rectangles. When the screen turns, the proportions on the right follow immediately.</string>
 
     <string name="device_loading">Reading…</string>
+    <string name="load_config">Load configuration</string>
+    <string name="config_loaded">Loaded. The daemon rereads this file.</string>
     <string name="test_hint">Draw a stroke below. This page does not fight scrolling for the touch.</string>
     <string name="clear_canvas">Reset</string>
 
