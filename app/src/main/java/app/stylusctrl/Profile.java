@@ -33,6 +33,8 @@ public class Profile {
     public Feel external = Feel.tabletDefault();
     public Feel internal = new Feel();
     public boolean internalOn;
+    /** 0, 90, 180, or 270. The panel sensor's mount, not a preset and not the screen. */
+    public int internalOrientation;
     /** When set, this replaces the built-in sec_e-pen / I2C rule. */
     public boolean hasInternalMatch;
     public String internalName = "";
@@ -134,6 +136,11 @@ public class Profile {
         JSONObject internal = root.optJSONObject("internal");
         if (internal != null) {
             p.internalOn = internal.optBoolean("enabled", false);
+            int mount = internal.optInt("orientation", 0);
+            if (mount == 1) mount = 90;
+            else if (mount == 2) mount = 180;
+            else if (mount == 3) mount = 270;
+            if (mount == 90 || mount == 180 || mount == 270) p.internalOrientation = mount;
             readInternalMatch(internal.optJSONObject("match"), p);
             boolean ownPressure = readFeelPressure(internal.optJSONObject("pressure"), p.internal);
             boolean ownButtons = readFeelButtons(internal.optJSONObject("buttons"), internal.optJSONObject("tools"), p.internal);
@@ -402,6 +409,7 @@ public class Profile {
         b.append("  \"tools\": { \"eraserWins\": ").append(external.eraserWins).append(" },\n");
         b.append("  \"internal\": {\n");
         b.append("    \"enabled\": ").append(internalOn);
+        b.append(",\n    \"orientation\": ").append(internalOrientation);
         if (hasInternalMatch) b.append(",\n    \"match\": ").append(internalMatchJson());
         b.append(",\n");
         b.append("    \"pressure\": ").append(pressureJson(internal)).append(",\n");

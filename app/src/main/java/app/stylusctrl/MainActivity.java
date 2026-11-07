@@ -464,6 +464,7 @@ public class MainActivity extends AppCompatActivity {
         showFeel(feel());
         MaterialSwitch internal = internalPage.findViewById(R.id.internal_pen);
         internal.setChecked(p.internalOn);
+        checkMount(p);
         filling = false;
     }
 
@@ -670,10 +671,29 @@ public class MainActivity extends AppCompatActivity {
         rubberAdd.setOnClickListener(v -> addKey(feel().rubberKeys));
     }
 
+    private void checkMount(Profile p) {
+        com.google.android.material.chip.ChipGroup mounts = internalPage.findViewById(R.id.internal_orientation);
+        int id = R.id.mount_0;
+        if (p.internalOrientation == 90) id = R.id.mount_90;
+        else if (p.internalOrientation == 180) id = R.id.mount_180;
+        else if (p.internalOrientation == 270) id = R.id.mount_270;
+        mounts.check(id);
+    }
+
     private void wireInternal() {
         MaterialSwitch internal = internalPage.findViewById(R.id.internal_pen);
         internal.setOnCheckedChangeListener((button, checked) -> {
             if (!filling) profile.internalOn = checked;
+        });
+        com.google.android.material.chip.ChipGroup mounts = internalPage.findViewById(R.id.internal_orientation);
+        mounts.setOnCheckedStateChangeListener((group, checkedIds) -> {
+            if (filling || checkedIds.isEmpty()) return;
+            int id = checkedIds.get(0);
+            int degrees = 0;
+            if (id == R.id.mount_90) degrees = 90;
+            else if (id == R.id.mount_180) degrees = 180;
+            else if (id == R.id.mount_270) degrees = 270;
+            profile.internalOrientation = degrees;
         });
     }
 

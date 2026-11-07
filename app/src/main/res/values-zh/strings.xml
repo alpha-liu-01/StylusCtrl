@@ -32,9 +32,12 @@
     <string name="reset">复位</string>
     <string name="pressure_graph">横轴是手的压力，纵轴是送给系统的压力。最左节点的横位置是低位死区，低于它保持起点的输出。最右节点是高位死区，高于它顶到终点。</string>
 
-    <string name="internal_body">内屏笔不做区域映射。压感和快捷键在那两页里选「内屏笔」，和外接板子各存一份。这里只决定要不要抓取内屏笔。</string>
+    <string name="internal_body">内屏笔不做区域映射。压感和快捷键在那两页里选「内屏笔」，和外接板子各存一份。这里决定要不要抓取内屏笔，以及传感器相对屏幕的安装角度。</string>
     <string name="internal_switch">抓取内屏笔</string>
     <string name="internal_detail">打开之后独占内屏笔，坐标原样送出，只改这一份压感和侧键。三星笔上的笔槽、皮套、悬停距离和 Home 键会原样送回。</string>
+    <string name="internal_mount">传感器安装角度</string>
+    <string name="internal_mount_detail">内核坐标和屏幕的自然方向差了 90°、180° 或 270° 时选这里。写在虚拟设备上，不进任何一份预设。0° 保持内核报上来的轴。</string>
+    <string name="mount_0">安装 0°</string>
 
     <string name="preset_stretch">拉伸铺满</string>
     <string name="preset_center">等比居中</string>

@@ -35,9 +35,15 @@
     <string name="reset">Reset</string>
     <string name="pressure_graph">Horizontal is how hard you press. Vertical is the pressure sent to the system. The left node\'s horizontal position is the low deadzone: below it, output stays at the start. The right node is the high deadzone: above it, output pins to the end.</string>
 
-    <string name="internal_body">The internal pen has no area mapping. Choose Internal pen on the pressure and button pages; that profile is stored separately from the external tablet. This page only decides whether to grab the internal pen.</string>
+    <string name="internal_body">The internal pen has no area mapping. Choose Internal pen on the pressure and button pages; that profile is stored separately from the external tablet. This page decides whether to grab the internal pen, and how its sensor sits on the panel.</string>
     <string name="internal_switch">Grab the internal pen</string>
     <string name="internal_detail">After it is on, the built-in pen is grabbed. Coordinates pass through, and only this profile\'s pressure and side buttons change. On the Samsung pen, the dock, cover, hover distance, and the original Home key are forwarded unchanged.</string>
+    <string name="internal_mount">Sensor mount</string>
+    <string name="internal_mount_detail">Use this when the kernel axes are turned relative to the screen\'s natural orientation. It is written onto the virtual device and is not part of a preset. 0° leaves the axes as the kernel reports them.</string>
+    <string name="mount_0">Mount 0°</string>
+    <string name="mount_90" translatable="false">90°</string>
+    <string name="mount_180" translatable="false">180°</string>
+    <string name="mount_270" translatable="false">270°</string>
 
     <string name="preset_stretch">Stretch to fill</string>
     <string name="preset_center">Fit, centered</string>

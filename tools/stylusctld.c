@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -234,6 +235,9 @@ struct profile {
     int in_saw_pen;
     int in_pen;
     int in_multitouch;
+    /* Quarters from internal.orientation. 0 leaves the virtual device without
+       an IDC. 1–3 become touch.orientation on that device only. */
+    int in_mount;
     char match_name[80];
     int disp_w;
     int disp_h;
@@ -1434,6 +1438,14 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
         if (!strcmp(path, "display.rotation")) prof->orientation = q;
         else prof->rotation = q;
     }
+    if (!strcmp(path, "internal.orientation")) {
+        int q = (int)(v >= 0 ? v + 0.5 : v - 0.5);
+        if (q == 90) q = 1;
+        else if (q == 180) q = 2;
+        else if (q == 270) q = 3;
+        if (q < 0 || q > 3) return -1;
+        prof->in_mount = q;
+    }
     if (!strcmp(path, "display.width") || !strcmp(path, "display.height")) {
         int n = (int)(v >= 0 ? v + 0.5 : v - 0.5);
         if (n <= 0) return -1;
@@ -2003,6 +2015,12 @@ static void test_parse_roadmap(void) {
     expect("internal parse", parse_config("{\"internal\":{\"enabled\":true}}", &p), 0);
     expect("internal on", p.internal_on, 1);
     expect("internal feel absent", p.in_ready, 0);
+    expect("mount parse", parse_config("{\"internal\":{\"orientation\":270}}", &p), 0);
+    expect("mount", p.in_mount, 3);
+    expect("mount 90", parse_config("{\"internal\":{\"orientation\":90}}", &p), 0);
+    expect("mount q", p.in_mount, 1);
+    expect("mount 0", parse_config("{\"internal\":{\"orientation\":0}}", &p), 0);
+    expect("mount clear", p.in_mount, 0);
     expect("ceiling default", p.ceiling == 1.0, 1);
     expect("chord3", parse_config("{\"buttons\":{\"BTN_STYLUS\":{\"action\":\"shortcut\",\"keys\":[\"CTRL\",\"SHIFT\",\"Z\"]}}}", &p), 0);
     expect("chord n", p.stylus_nkeys, 3);
@@ -2483,6 +2501,8 @@ struct pen {
     int n;
     int seen;
     int idc_on;
+    /* Quarters written into this virtual device's IDC. 0 means the file is absent. */
+    int mount;
     int direct;
     int pen_tool;
     int multitouch;
@@ -2808,6 +2828,7 @@ static void log_profile(void) {
     if (cfg.has_match) log_msg("match %04x:%04x only", cfg.vendor, cfg.product);
     if (cfg.match_name[0]) log_msg("match name %s", cfg.match_name);
     if (cfg.in_match) log_msg("internal match loaded");
+    if (cfg.in_mount) log_msg("internal orientation %d", cfg.in_mount * 90);
     if (cfg.curve_n) log_msg("pressure curve loaded");
     if (cfg.in_ready) {
         log_msg("internal profile, stylus %s, eraser %s, deadzone %.2f-%.2f", stylus_word(cfg.in_stylus_action),
@@ -2897,6 +2918,74 @@ static int load_config(void) {
     return 0;
 }
 
+static const char *mount_word(int quarters) {
+    switch (quarters & 3) {
+    case 1:
+        return "ORIENTATION_90";
+    case 2:
+        return "ORIENTATION_180";
+    case 3:
+        return "ORIENTATION_270";
+    default:
+        return "ORIENTATION_0";
+    }
+}
+
+/* InputReader only reads an IDC labeled as system data. A root daemon's
+   default label is not that. */
+static void label_system_data(const char *path) {
+    const char ctx[] = "u:object_r:system_data_file:s0";
+    if (setxattr(path, "security.selinux", ctx, sizeof ctx, 0) < 0 && errno != ENOTSUP)
+        log_errno(path);
+}
+
+static int ensure_dir(const char *path) {
+    if (mkdir(path, 0775) == 0 || errno == EEXIST) return 0;
+    log_errno(path);
+    return -1;
+}
+
+static int write_mount_idc(const char *path, int quarters) {
+    if (ensure_dir("/data/system/devices") < 0) return -1;
+    label_system_data("/data/system/devices");
+    if (ensure_dir("/data/system/devices/idc") < 0) return -1;
+    label_system_data("/data/system/devices/idc");
+    char body[256];
+    int n = snprintf(body, sizeof body,
+                     "device.internal = 1\n"
+                     "touch.deviceType = touchScreen\n"
+                     "touch.orientationAware = 1\n"
+                     "touch.orientation = %s\n",
+                     mount_word(quarters));
+    if (n < 0 || n >= (int)sizeof body) return -1;
+    char tmp[200];
+    int tw = snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    if (tw < 0 || tw >= (int)sizeof tmp) return -1;
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd < 0) return -1;
+    int off = 0;
+    while (off < n) {
+        ssize_t w = write(fd, body + off, (size_t)(n - off));
+        if (w < 0) {
+            close(fd);
+            unlink(tmp);
+            return -1;
+        }
+        off += (int)w;
+    }
+    if (close(fd) < 0) {
+        unlink(tmp);
+        return -1;
+    }
+    if (rename(tmp, path) < 0) {
+        unlink(tmp);
+        return -1;
+    }
+    if (chmod(path, 0644) < 0) log_errno(path);
+    label_system_data(path);
+    return 0;
+}
+
 static void idc_path_for(const char *vname, char *out, int cap) {
     char canon[96];
     int j = 0;
@@ -2915,9 +3004,23 @@ static void sync_idc(struct pen *pen) {
     idc_path_for(pen->vname, pen->idc_path, (int)sizeof pen->idc_path);
     if (!pen->idc_path[0]) return;
     /* POINTER must stay orientationAware false. A name IDC with that flag
-       swaps the raw axes and crops a landscape screen down to 12:20. */
-    if (unlink(pen->idc_path) == 0) log_msg("removed IDC %s", pen->idc_path);
-    else if (errno != ENOENT) log_errno(pen->idc_path);
+       swaps the raw axes and crops a landscape screen down to 12:20.
+       A direct pen keeps its kernel axes. internal.orientation is the same
+       fixed mount correction the panel's own IDC would have applied. */
+    int mount = (pen->direct && cfg_loaded) ? cfg.in_mount : 0;
+    if (!mount) {
+        if (unlink(pen->idc_path) == 0) log_msg("removed IDC %s", pen->idc_path);
+        else if (errno != ENOENT) log_errno(pen->idc_path);
+        pen->mount = 0;
+        return;
+    }
+    if (write_mount_idc(pen->idc_path, mount) < 0) {
+        log_errno(pen->idc_path);
+        pen->mount = 0;
+        return;
+    }
+    pen->mount = mount;
+    log_msg("wrote IDC %s, orientation %d", pen->idc_path, mount * 90);
 }
 
 static int open_virtual(struct pen *pen) {
@@ -3663,7 +3766,9 @@ static void reload_config(struct pen *pens, int *npens) {
             }
         }
         for (int i = 0; i < *npens; i++) {
-            if (pens[i].fd < 0 || pens[i].idc_on == cfg_loaded) continue;
+            if (pens[i].fd < 0) continue;
+            int want_mount = (pens[i].direct && cfg_loaded) ? cfg.in_mount : 0;
+            if (pens[i].idc_on == cfg_loaded && pens[i].mount == want_mount) continue;
             if (open_virtual(&pens[i]) == 0) {
                 resync_pen(&pens[i]);
                 log_msg("rebuilt %s from config", pens[i].path);
