@@ -6,10 +6,14 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.content.pm.ResolveInfo;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Point;
 import android.graphics.Rect;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -18,6 +22,7 @@ import android.view.Display;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.view.ViewStub;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.EditText;
@@ -78,7 +83,15 @@ public class MainActivity extends AppCompatActivity {
     private View appsPage;
     private View devicePage;
     private RecyclerView appList;
+    private MaterialButtonToggleGroup appsDevice;
     private TextView watchState;
+    private int rowHighlight;
+    private int rowOnContainer;
+    private int rowOnSurface;
+    private int rowOutline;
+    private float segmentRadius;
+    /** Same radius as the apps list card, so the end rows follow its corners. */
+    private float listCorner;
     private final List<AppEntry> shownApps = new ArrayList<>();
     private MappingBoard board;
     private ChipGroup presets;
@@ -174,14 +187,30 @@ public class MainActivity extends AppCompatActivity {
         appList.setLayoutManager(new LinearLayoutManager(this));
         appList.setHasFixedSize(true);
         appList.setItemAnimator(null);
-        appList.setAdapter(new AppAdapter());
+        appList.setItemViewCacheSize(8);
+        appList.getRecycledViewPool().setMaxRecycledViews(0, 12);
+        AppAdapter appsAdapter = new AppAdapter();
+        appsAdapter.setHasStableIds(true);
+        appList.setAdapter(appsAdapter);
+        rowHighlight = MaterialColors.getColor(appList, com.google.android.material.R.attr.colorSecondaryContainer);
+        rowOnContainer = MaterialColors.getColor(appList, com.google.android.material.R.attr.colorOnSecondaryContainer);
+        rowOnSurface = MaterialColors.getColor(appList, com.google.android.material.R.attr.colorOnSurface);
+        rowOutline = MaterialColors.getColor(appList, com.google.android.material.R.attr.colorOutline);
+        segmentRadius = 20f * getResources().getDisplayMetrics().density;
+        listCorner = 28f * getResources().getDisplayMetrics().density;
         watchState = appsPage.findViewById(R.id.watch_state);
         appsPage.findViewById(R.id.watch_foreground).setOnClickListener(v -> watchForeground());
         refreshWatchState();
-        MaterialButtonToggleGroup appsDevice = appsPage.findViewById(R.id.apps_device);
+        appsDevice = appsPage.findViewById(R.id.apps_device);
         appsDevice.check(R.id.apps_external);
         appsDevice.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
             if (!isChecked || filling) return;
+            if (!externalPresent && checkedId != R.id.apps_internal) {
+                filling = true;
+                group.check(R.id.apps_internal);
+                filling = false;
+                return;
+            }
             chooseEditDevice(checkedId == R.id.apps_internal);
         });
         io.execute(() -> {
@@ -390,6 +419,7 @@ public class MainActivity extends AppCompatActivity {
             deviceLine = line;
             pageSub.setText(line);
         }
+        syncAppsDevice();
     }
 
     /** Keep the previous pen across the 0100-to-0104 gap. A real unplug lasts longer than that. */
@@ -984,6 +1014,37 @@ public class MainActivity extends AppCompatActivity {
         bindApps();
     }
 
+    /** Without an external tablet the apps page stays on the internal pen. */
+    private void syncAppsDevice() {
+        if (appsDevice == null) return;
+        if (!externalPresent && (!editingInternal || !editorLive)) chooseEditDevice(true);
+        int want = editingInternal ? R.id.apps_internal : R.id.apps_external;
+        if (appsDevice.getCheckedButtonId() != want) {
+            filling = true;
+            appsDevice.check(want);
+            filling = false;
+        }
+        View externalBtn = appsDevice.findViewById(R.id.apps_external);
+        if (externalBtn.isEnabled() != externalPresent) externalBtn.setEnabled(externalPresent);
+    }
+
+    /** Package icons are drawn once. Scrolling then blits a small bitmap. */
+    private Drawable raster(Drawable raw) {
+        if (raw == null) return null;
+        try {
+            int size = Math.round(40f * getResources().getDisplayMetrics().density);
+            Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            Drawable copy = raw.mutate();
+            copy.setBounds(0, 0, size, size);
+            copy.draw(canvas);
+            bitmap.setDensity(getResources().getDisplayMetrics().densityDpi);
+            return new BitmapDrawable(getResources(), bitmap);
+        } catch (RuntimeException e) {
+            return raw;
+        }
+    }
+
     private List<AppEntry> loadApps() {
         List<AppEntry> list = new ArrayList<>();
         java.util.HashSet<String> seen = new java.util.HashSet<>();
@@ -996,7 +1057,7 @@ public class MainActivity extends AppCompatActivity {
             AppEntry entry = new AppEntry();
             entry.pkg = pkg;
             entry.label = info.loadLabel(pm).toString();
-            entry.icon = info.loadIcon(pm);
+            entry.icon = raster(info.loadIcon(pm));
             list.add(entry);
         }
         list.sort(Comparator.comparing(entry -> entry.label, Collator.getInstance()));
@@ -1022,7 +1083,7 @@ public class MainActivity extends AppCompatActivity {
                 extra.pkg = pkg;
                 extra.label = pkg;
                 try {
-                    extra.icon = getPackageManager().getApplicationIcon(pkg);
+                    extra.icon = raster(getPackageManager().getApplicationIcon(pkg));
                     extra.label = getPackageManager().getApplicationLabel(
                             getPackageManager().getApplicationInfo(pkg, 0)).toString();
                 } catch (PackageManager.NameNotFoundException ignored) {
@@ -1182,23 +1243,27 @@ public class MainActivity extends AppCompatActivity {
         public void onBindViewHolder(Holder holder, int position) {
             AppEntry entry = shownApps.get(position);
             boolean global = entry.pkg.isEmpty();
-            holder.label.setText(global ? getString(R.string.app_global) : entry.label);
-            if (global) {
-                holder.icon.setImageResource(editingInternal
-                        ? android.R.drawable.ic_menu_slideshow : android.R.drawable.ic_menu_edit);
-            } else if (entry.icon != null) holder.icon.setImageDrawable(entry.icon);
+            String title = global ? getString(R.string.app_global) : entry.label;
+            if (title != null && !title.contentEquals(holder.label.getText())) holder.label.setText(title);
+            Drawable icon = global
+                    ? holder.globalIcon(editingInternal)
+                    : entry.icon;
+            if (icon != null && holder.icon.getDrawable() != icon) holder.icon.setImageDrawable(icon);
             holder.mode.setVisibility(global ? View.GONE : View.VISIBLE);
             if (global) {
-                holder.customRow.setVisibility(View.GONE);
+                if (holder.customRow != null) holder.customRow.setVisibility(View.GONE);
             } else {
                 PresetStore.Device device = PresetStore.device(deviceKey());
                 String assigned = device == null ? null : device.apps.get(entry.pkg);
                 boolean custom = assigned != null && !assigned.isEmpty();
-                bindingRows++;
-                fillPresetSpinner(holder.spinner, assigned);
-                holder.mode.check(custom ? R.id.app_custom : R.id.app_default);
-                holder.customRow.setVisibility(custom ? View.VISIBLE : View.GONE);
-                bindingRows--;
+                holder.showMode(custom);
+                if (custom) {
+                    holder.ensureCustom();
+                    holder.customRow.setVisibility(View.VISIBLE);
+                    fillPresetSpinner(holder.spinner, assigned);
+                } else if (holder.customRow != null) {
+                    holder.customRow.setVisibility(View.GONE);
+                }
             }
             paint(holder, position);
         }
@@ -1206,15 +1271,21 @@ public class MainActivity extends AppCompatActivity {
         private void paint(Holder holder, int position) {
             AppEntry entry = shownApps.get(position);
             String current = editPackage == null ? "" : editPackage;
-            int color = entry.pkg.equals(current)
-                    ? MaterialColors.getColor(holder.itemView, com.google.android.material.R.attr.colorSecondaryContainer)
-                    : Color.TRANSPARENT;
-            holder.itemView.setBackgroundColor(color);
+            int count = shownApps.size();
+            holder.paint(entry.pkg.equals(current) ? rowHighlight : Color.TRANSPARENT,
+                    position == 0, count > 0 && position == count - 1);
         }
 
         @Override
         public int getItemCount() {
             return shownApps.size();
+        }
+
+        @Override
+        public long getItemId(int position) {
+            String pkg = shownApps.get(position).pkg;
+            if (pkg.isEmpty()) return 0L;
+            return pkg.hashCode() & 0xffffffffL;
         }
 
         private void openRow(Holder holder) {
@@ -1232,37 +1303,103 @@ public class MainActivity extends AppCompatActivity {
         final class Holder extends RecyclerView.ViewHolder {
             final ImageView icon;
             final TextView label;
-            final View customRow;
-            final Spinner spinner;
-            final MaterialButtonToggleGroup mode;
+            final View mode;
+            final TextView defBtn;
+            final TextView customBtn;
+            final GradientDrawable selected = new GradientDrawable();
+            final GradientDrawable plate = new GradientDrawable();
+            final ViewStub stub;
+            View customRow;
+            Spinner spinner;
+            private Drawable internalIcon;
+            private Drawable externalIcon;
+            private int painted = Color.TRANSPARENT;
+            private boolean roundedTop;
+            private boolean roundedBottom;
+            private boolean modeSet;
+            private boolean customOn;
 
             Holder(View row) {
                 super(row);
                 icon = row.findViewById(R.id.app_icon);
                 label = row.findViewById(R.id.app_label);
-                customRow = row.findViewById(R.id.app_custom_row);
-                spinner = row.findViewById(R.id.app_presets);
                 mode = row.findViewById(R.id.app_mode);
+                defBtn = row.findViewById(R.id.app_default);
+                customBtn = row.findViewById(R.id.app_custom);
+                stub = row.findViewById(R.id.app_custom_stub);
+                row.setBackground(plate);
+                float density = segmentRadius / 20f;
+                GradientDrawable track = new GradientDrawable();
+                track.setCornerRadius(segmentRadius);
+                track.setStroke(Math.max(1, Math.round(density)), rowOutline);
+                mode.setBackground(track);
+                selected.setCornerRadius(Math.max(0f, segmentRadius - 3f * density));
+                selected.setColor(rowHighlight);
                 View.OnClickListener select = v -> openRow(this);
                 row.setOnClickListener(select);
                 label.setOnClickListener(select);
                 icon.setOnClickListener(select);
-                mode.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
-                    if (!isChecked || bindingRows > 0) return;
-                    AppEntry entry = rowAt(this);
-                    if (entry == null || entry.pkg.isEmpty()) return;
-                    if (checkedId == R.id.app_default) {
-                        PresetStore.removeOverride(deviceKey(), entry.pkg);
-                        customRow.setVisibility(View.GONE);
-                        if (entry.pkg.equals(editPackage)) focusGlobal();
-                        else refreshSelection();
-                        writeConfig(false);
-                    } else {
-                        customRow.setVisibility(View.VISIBLE);
-                        fillPresetSpinner(spinner, devicePreset(entry.pkg));
-                        if (!ForegroundWatch.allowed(MainActivity.this)) watchForeground();
-                    }
+                defBtn.setOnClickListener(v -> chooseCustom(false));
+                customBtn.setOnClickListener(v -> chooseCustom(true));
+            }
+
+            void showMode(boolean custom) {
+                if (modeSet && customOn == custom) return;
+                modeSet = true;
+                customOn = custom;
+                defBtn.setBackground(custom ? null : selected);
+                customBtn.setBackground(custom ? selected : null);
+                defBtn.setTextColor(custom ? rowOnSurface : rowOnContainer);
+                customBtn.setTextColor(custom ? rowOnContainer : rowOnSurface);
+            }
+
+            private void chooseCustom(boolean custom) {
+                if (modeSet && customOn == custom) return;
+                AppEntry entry = rowAt(this);
+                if (entry == null || entry.pkg.isEmpty()) return;
+                showMode(custom);
+                if (!custom) {
+                    PresetStore.removeOverride(deviceKey(), entry.pkg);
+                    if (customRow != null) customRow.setVisibility(View.GONE);
+                    if (entry.pkg.equals(editPackage)) focusGlobal();
+                    else refreshSelection();
+                    writeConfig(false);
+                } else {
+                    ensureCustom();
+                    customRow.setVisibility(View.VISIBLE);
+                    fillPresetSpinner(spinner, devicePreset(entry.pkg));
+                    if (!ForegroundWatch.allowed(MainActivity.this)) watchForeground();
+                }
+            }
+
+            void paint(int color, boolean top, boolean bottom) {
+                if (painted == color && roundedTop == top && roundedBottom == bottom) return;
+                painted = color;
+                roundedTop = top;
+                roundedBottom = bottom;
+                float r = listCorner;
+                plate.setCornerRadii(new float[] {
+                        top ? r : 0f, top ? r : 0f,
+                        top ? r : 0f, top ? r : 0f,
+                        bottom ? r : 0f, bottom ? r : 0f,
+                        bottom ? r : 0f, bottom ? r : 0f
                 });
+                plate.setColor(color);
+            }
+
+            Drawable globalIcon(boolean internal) {
+                if (internal) {
+                    if (internalIcon == null) internalIcon = raster(icon.getContext().getDrawable(android.R.drawable.ic_menu_slideshow));
+                    return internalIcon;
+                }
+                if (externalIcon == null) externalIcon = raster(icon.getContext().getDrawable(android.R.drawable.ic_menu_edit));
+                return externalIcon;
+            }
+
+            void ensureCustom() {
+                if (customRow != null) return;
+                customRow = stub.inflate();
+                spinner = customRow.findViewById(R.id.app_presets);
                 spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                     @Override
                     public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -1286,12 +1423,12 @@ public class MainActivity extends AppCompatActivity {
                     public void onNothingSelected(AdapterView<?> parent) {
                     }
                 });
-                row.findViewById(R.id.app_rename).setOnClickListener(v -> promptRename(spinner));
-                row.findViewById(R.id.app_add).setOnClickListener(v -> {
+                customRow.findViewById(R.id.app_rename).setOnClickListener(v -> promptRename(spinner));
+                customRow.findViewById(R.id.app_add).setOnClickListener(v -> {
                     AppEntry entry = rowAt(this);
                     if (entry != null && !entry.pkg.isEmpty()) promptNewPreset(entry);
                 });
-                row.findViewById(R.id.app_delete).setOnClickListener(v -> deletePreset(spinner));
+                customRow.findViewById(R.id.app_delete).setOnClickListener(v -> deletePreset(spinner));
             }
         }
     }

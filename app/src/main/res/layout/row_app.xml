@@ -1,103 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:orientation="vertical"
-    android:paddingStart="8dp"
-    android:paddingTop="6dp"
-    android:paddingEnd="8dp"
-    android:paddingBottom="6dp">
+    android:foreground="?attr/selectableItemBackground"
+    android:orientation="vertical">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center_vertical"
-        android:orientation="horizontal">
+        android:minHeight="64dp"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp">
 
         <ImageView
             android:id="@+id/app_icon"
             android:layout_width="40dp"
             android:layout_height="40dp"
             android:contentDescription="@string/app_icon"
-            android:importantForAccessibility="no" />
+            android:importantForAccessibility="no"
+            android:scaleType="fitCenter" />
 
         <TextView
             android:id="@+id/app_label"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="12dp"
+            android:layout_marginStart="16dp"
+            android:layout_marginEnd="12dp"
             android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
             android:textAppearance="?attr/textAppearanceBodyLarge" />
 
-        <com.google.android.material.button.MaterialButtonToggleGroup
+        <LinearLayout
             android:id="@+id/app_mode"
             android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            app:selectionRequired="true"
-            app:singleSelection="true">
+            android:layout_height="40dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="3dp">
 
-            <com.google.android.material.button.MaterialButton
+            <TextView
                 android:id="@+id/app_default"
-                style="?attr/materialButtonOutlinedStyle"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:checkable="true"
+                android:layout_height="match_parent"
+                android:gravity="center"
                 android:minWidth="72dp"
-                android:text="@string/app_default" />
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="@string/app_default"
+                android:textAppearance="?attr/textAppearanceLabelLarge" />
 
-            <com.google.android.material.button.MaterialButton
+            <TextView
                 android:id="@+id/app_custom"
-                style="?attr/materialButtonOutlinedStyle"
                 android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:checkable="true"
+                android:layout_height="match_parent"
+                android:gravity="center"
                 android:minWidth="72dp"
-                android:text="@string/app_custom" />
-        </com.google.android.material.button.MaterialButtonToggleGroup>
+                android:paddingStart="12dp"
+                android:paddingEnd="12dp"
+                android:text="@string/app_custom"
+                android:textAppearance="?attr/textAppearanceLabelLarge" />
+        </LinearLayout>
     </LinearLayout>
 
-    <LinearLayout
-        android:id="@+id/app_custom_row"
+    <ViewStub
+        android:id="@+id/app_custom_stub"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginStart="52dp"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:visibility="gone">
-
-        <Spinner
-            android:id="@+id/app_presets"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:spinnerMode="dropdown" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/app_rename"
-            style="@style/Widget.Material3.Button.IconButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:contentDescription="@string/preset_rename"
-            app:icon="@android:drawable/ic_menu_edit"
-            app:iconSize="22dp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/app_add"
-            style="@style/Widget.Material3.Button.IconButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:contentDescription="@string/preset_add"
-            app:icon="@android:drawable/ic_menu_add"
-            app:iconSize="22dp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/app_delete"
-            style="@style/Widget.Material3.Button.IconButton"
-            android:layout_width="48dp"
-            android:layout_height="48dp"
-            android:contentDescription="@string/preset_delete"
-            app:icon="@android:drawable/ic_menu_delete"
-            app:iconSize="22dp" />
-    </LinearLayout>
+        android:layout_marginStart="56dp"
+        android:layout="@layout/row_app_custom"
+        android:inflatedId="@+id/app_custom_row" />
 </LinearLayout>

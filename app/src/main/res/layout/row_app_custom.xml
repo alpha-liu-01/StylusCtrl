@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingEnd="4dp"
+    android:paddingBottom="4dp">
+
+    <Spinner
+        android:id="@+id/app_presets"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:spinnerMode="dropdown" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/app_rename"
+        style="@style/Widget.Material3.Button.IconButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:contentDescription="@string/preset_rename"
+        app:icon="@android:drawable/ic_menu_edit"
+        app:iconSize="22dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/app_add"
+        style="@style/Widget.Material3.Button.IconButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:contentDescription="@string/preset_add"
+        app:icon="@android:drawable/ic_menu_add"
+        app:iconSize="22dp" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/app_delete"
+        style="@style/Widget.Material3.Button.IconButton"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:contentDescription="@string/preset_delete"
+        app:icon="@android:drawable/ic_menu_delete"
+        app:iconSize="22dp" />
+</LinearLayout>
