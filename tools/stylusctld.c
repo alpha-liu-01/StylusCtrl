@@ -36,6 +36,12 @@
 #ifndef BUS_I2C
 #define BUS_I2C 0x18
 #endif
+/* 32-bit musl uses a 64-bit time_t, so input_event stores the kernel's
+   long timestamp as __sec/__usec. These names exist in that header. */
+#ifndef input_event_sec
+#define input_event_sec time.tv_sec
+#define input_event_usec time.tv_usec
+#endif
 
 /* Default when the config has no internal.match. sec_e-pen is Samsung's
    digitizer. Any other built-in pen is an I2C node with INPUT_PROP_DIRECT,
@@ -238,6 +244,9 @@ struct profile {
     /* Quarters from internal.orientation. 0 leaves the virtual device without
        an IDC. 1–3 become touch.orientation on that device only. */
     int in_mount;
+    /* The virtual device is a pointer, matching an IDC that says
+       touch.deviceType = pointer. A second touchscreen is left unmapped. */
+    int in_pointer;
     char match_name[80];
     int disp_w;
     int disp_h;
@@ -1373,6 +1382,7 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
             prof->in_eraser_wins = 1;
         }
         if (!strcmp(path, "internal.enabled")) prof->internal_on = 1;
+        if (!strcmp(path, "internal.pointer")) prof->in_pointer = 1;
         if (!strcmp(path, "internal.match.direct")) {
             prof->in_saw_direct = 1;
             prof->in_direct = 1;
@@ -1397,6 +1407,7 @@ static int parse_value(const char **pp, const char *path, struct profile *prof) 
             prof->in_eraser_wins = 0;
         }
         if (!strcmp(path, "internal.enabled")) prof->internal_on = 0;
+        if (!strcmp(path, "internal.pointer")) prof->in_pointer = 0;
         if (!strcmp(path, "internal.match.direct")) {
             prof->in_saw_direct = 1;
             prof->in_direct = 0;
@@ -1697,8 +1708,8 @@ static int fill_shortcut(const int *keys, int nkeys, int down, struct input_even
     if (down) {
         for (int i = 0; i < nkeys; i++) {
             memset(&out[count], 0, sizeof out[count]);
-            out[count].time.tv_sec = ts.tv_sec;
-            out[count].time.tv_usec = (suseconds_t)(ts.tv_nsec / 1000);
+            out[count].input_event_sec = (long)ts.tv_sec;
+            out[count].input_event_usec = (long)(ts.tv_nsec / 1000);
             out[count].type = EV_KEY;
             out[count].code = (unsigned short)keys[i];
             out[count].value = 1;
@@ -1707,8 +1718,8 @@ static int fill_shortcut(const int *keys, int nkeys, int down, struct input_even
     } else {
         for (int i = nkeys - 1; i >= 0; i--) {
             memset(&out[count], 0, sizeof out[count]);
-            out[count].time.tv_sec = ts.tv_sec;
-            out[count].time.tv_usec = (suseconds_t)(ts.tv_nsec / 1000);
+            out[count].input_event_sec = (long)ts.tv_sec;
+            out[count].input_event_usec = (long)(ts.tv_nsec / 1000);
             out[count].type = EV_KEY;
             out[count].code = (unsigned short)keys[i];
             out[count].value = 0;
@@ -1716,8 +1727,8 @@ static int fill_shortcut(const int *keys, int nkeys, int down, struct input_even
         }
     }
     memset(&out[count], 0, sizeof out[count]);
-    out[count].time.tv_sec = ts.tv_sec;
-    out[count].time.tv_usec = (suseconds_t)(ts.tv_nsec / 1000);
+    out[count].input_event_sec = (long)ts.tv_sec;
+    out[count].input_event_usec = (long)(ts.tv_nsec / 1000);
     out[count].type = EV_SYN;
     out[count].code = SYN_REPORT;
     count++;
@@ -2021,6 +2032,8 @@ static void test_parse_roadmap(void) {
     expect("mount q", p.in_mount, 1);
     expect("mount 0", parse_config("{\"internal\":{\"orientation\":0}}", &p), 0);
     expect("mount clear", p.in_mount, 0);
+    expect("pointer parse", parse_config("{\"internal\":{\"pointer\":true}}", &p), 0);
+    expect("pointer", p.in_pointer, 1);
     expect("ceiling default", p.ceiling == 1.0, 1);
     expect("chord3", parse_config("{\"buttons\":{\"BTN_STYLUS\":{\"action\":\"shortcut\",\"keys\":[\"CTRL\",\"SHIFT\",\"Z\"]}}}", &p), 0);
     expect("chord n", p.stylus_nkeys, 3);
@@ -2501,8 +2514,9 @@ struct pen {
     int n;
     int seen;
     int idc_on;
-    /* Quarters written into this virtual device's IDC. 0 means the file is absent. */
+    /* Quarters written into this virtual device's IDC. */
     int mount;
+    int as_pointer;
     int direct;
     int pen_tool;
     int multitouch;
@@ -2578,7 +2592,10 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
     for (int i = 0; i < 3; i++) {
         if (ioctl(ufd, UI_SET_EVBIT, evbits[i]) < 0) goto fail;
     }
-    if (ioctl(ufd, UI_SET_PROPBIT, direct ? INPUT_PROP_DIRECT : INPUT_PROP_POINTER) < 0) goto fail;
+    /* internal.pointer keeps the grab on the direct path but publishes a
+       pointer, which is what the panel's own IDC asked for. */
+    int as_direct = direct && !(cfg_loaded && cfg.in_pointer);
+    if (ioctl(ufd, UI_SET_PROPBIT, as_direct ? INPUT_PROP_DIRECT : INPUT_PROP_POINTER) < 0) goto fail;
     for (int i = 0; i < 5; i++) {
         if (ioctl(ufd, UI_SET_KEYBIT, keys[i]) < 0) goto fail;
     }
@@ -2602,7 +2619,33 @@ static int create_uinput(const char *name, const struct input_id *id, const stru
     setup.id.product = id->product;
     setup.id.version = id->version;
     snprintf(setup.name, sizeof setup.name, "%s", name);
-    if (ioctl(ufd, UI_DEV_SETUP, &setup) < 0) goto fail;
+    /* Kernel 3.0 has no UI_DEV_SETUP. The bits are already set; the old
+       interface takes one uinput_user_dev write, then UI_DEV_CREATE.
+       Resolution is not part of that struct. */
+    if (ioctl(ufd, UI_DEV_SETUP, &setup) < 0) {
+        int err = errno;
+        if (err != ENOTTY && err != EINVAL) goto fail;
+        struct uinput_user_dev dev;
+        memset(&dev, 0, sizeof dev);
+        snprintf(dev.name, sizeof dev.name, "%s", name);
+        dev.id.bustype = BUS_USB;
+        dev.id.vendor = id->vendor;
+        dev.id.product = id->product;
+        dev.id.version = id->version;
+        for (int i = 0; i < naxes; i++) {
+            int code = axes[i].code;
+            if (!axes[i].present || code < 0 || code >= ABS_CNT) continue;
+            dev.absmin[code] = axes[i].info.minimum;
+            dev.absmax[code] = axes[i].info.maximum;
+            dev.absfuzz[code] = axes[i].info.fuzz;
+            dev.absflat[code] = axes[i].info.flat;
+        }
+        if (write_all(ufd, &dev, sizeof dev) < 0) goto fail;
+        if (ioctl(ufd, UI_DEV_CREATE, 0) < 0) goto fail;
+        log_msg("uinput legacy interface");
+        *ufd_out = ufd;
+        return 0;
+    }
     for (int i = 0; i < naxes; i++) {
         if (!axes[i].present) continue;
         struct uinput_abs_setup abs;
@@ -2620,11 +2663,40 @@ fail:
     return -1;
 }
 
-static int uinput_sysname(int ufd, char *out, int cap) {
+static int sysname_by_name(const char *want, char *out, int cap) {
+    DIR *dir = opendir("/sys/class/input");
+    if (!dir) return -1;
+    int best = -1;
+    struct dirent *ent;
+    while ((ent = readdir(dir))) {
+        if (strncmp(ent->d_name, "input", 5) != 0 || strlen(ent->d_name) > 16) continue;
+        char *end = NULL;
+        long n = strtol(ent->d_name + 5, &end, 10);
+        if (end == ent->d_name + 5 || (end && *end)) continue;
+        char path[80];
+        char text[96];
+        snprintf(path, sizeof path, "/sys/class/input/%.*s/name", 16, ent->d_name);
+        if (read_text(path, text, sizeof text) < 0) continue;
+        for (char *p = text; *p; p++) {
+            if (*p == '\n' || *p == '\r') *p = 0;
+        }
+        if (strcmp(text, want) != 0) continue;
+        if ((int)n < best) continue;
+        best = (int)n;
+        snprintf(out, (size_t)cap, "%.*s", 16, ent->d_name);
+    }
+    closedir(dir);
+    return best >= 0 ? 0 : -1;
+}
+
+static int uinput_sysname(int ufd, const char *name, char *out, int cap) {
     memset(out, 0, (size_t)cap);
-    if (ioctl(ufd, UI_GET_SYSNAME(cap), out) < 0) return -1;
-    out[cap - 1] = 0;
-    return 0;
+    if (ioctl(ufd, UI_GET_SYSNAME(cap), out) == 0) {
+        out[cap - 1] = 0;
+        if (out[0]) return 0;
+    }
+    if (!name) return -1;
+    return sysname_by_name(name, out, cap);
 }
 
 static void event_node(const char *sysname, char *out, int cap) {
@@ -2678,7 +2750,7 @@ static int check_mode(void) {
     int ufd = -1;
     if (create_uinput("StylusCtrl check", &id, axes, 5, 0, 0, &ufd) < 0) return 1;
     char sysname[64];
-    if (uinput_sysname(ufd, sysname, sizeof sysname) < 0) {
+    if (uinput_sysname(ufd, "StylusCtrl check", sysname, sizeof sysname) < 0) {
         log_errno("UI_GET_SYSNAME");
         ioctl(ufd, UI_DEV_DESTROY);
         close(ufd);
@@ -2829,6 +2901,7 @@ static void log_profile(void) {
     if (cfg.match_name[0]) log_msg("match name %s", cfg.match_name);
     if (cfg.in_match) log_msg("internal match loaded");
     if (cfg.in_mount) log_msg("internal orientation %d", cfg.in_mount * 90);
+    if (cfg.in_pointer) log_msg("internal pointer");
     if (cfg.curve_n) log_msg("pressure curve loaded");
     if (cfg.in_ready) {
         log_msg("internal profile, stylus %s, eraser %s, deadzone %.2f-%.2f", stylus_word(cfg.in_stylus_action),
@@ -2945,7 +3018,7 @@ static int ensure_dir(const char *path) {
     return -1;
 }
 
-static int write_mount_idc(const char *path, int quarters) {
+static int write_mount_idc(const char *path, int quarters, int pointer) {
     if (ensure_dir("/data/system/devices") < 0) return -1;
     label_system_data("/data/system/devices");
     if (ensure_dir("/data/system/devices/idc") < 0) return -1;
@@ -2953,10 +3026,10 @@ static int write_mount_idc(const char *path, int quarters) {
     char body[256];
     int n = snprintf(body, sizeof body,
                      "device.internal = 1\n"
-                     "touch.deviceType = touchScreen\n"
+                     "touch.deviceType = %s\n"
                      "touch.orientationAware = 1\n"
                      "touch.orientation = %s\n",
-                     mount_word(quarters));
+                     pointer ? "pointer" : "touchScreen", mount_word(quarters));
     if (n < 0 || n >= (int)sizeof body) return -1;
     char tmp[200];
     int tw = snprintf(tmp, sizeof tmp, "%s.tmp", path);
@@ -3005,22 +3078,26 @@ static void sync_idc(struct pen *pen) {
     if (!pen->idc_path[0]) return;
     /* POINTER must stay orientationAware false. A name IDC with that flag
        swaps the raw axes and crops a landscape screen down to 12:20.
-       A direct pen keeps its kernel axes. internal.orientation is the same
-       fixed mount correction the panel's own IDC would have applied. */
-    int mount = (pen->direct && cfg_loaded) ? cfg.in_mount : 0;
-    if (!mount) {
+       A direct pen is the panel. Mark it internal even at orientation 0:
+       a USB-bus virtual touchscreen is otherwise left unassociated, and
+       Android 12 disables it. internal.orientation is only the mount. */
+    if (!pen->direct || !cfg_loaded) {
         if (unlink(pen->idc_path) == 0) log_msg("removed IDC %s", pen->idc_path);
         else if (errno != ENOENT) log_errno(pen->idc_path);
         pen->mount = 0;
+        pen->as_pointer = 0;
         return;
     }
-    if (write_mount_idc(pen->idc_path, mount) < 0) {
+    pen->as_pointer = cfg.in_pointer;
+    if (write_mount_idc(pen->idc_path, cfg.in_mount, cfg.in_pointer) < 0) {
         log_errno(pen->idc_path);
         pen->mount = 0;
+        pen->as_pointer = 0;
         return;
     }
-    pen->mount = mount;
-    log_msg("wrote IDC %s, orientation %d", pen->idc_path, mount * 90);
+    pen->mount = cfg.in_mount;
+    log_msg("wrote IDC %s, %s, orientation %d", pen->idc_path, cfg.in_pointer ? "pointer" : "touchScreen",
+            cfg.in_mount * 90);
 }
 
 static int open_virtual(struct pen *pen) {
@@ -3189,7 +3266,18 @@ static int create_keyboard(const int *codes, int ncodes) {
     setup.id.product = 0x0001;
     setup.id.version = 1;
     snprintf(setup.name, sizeof setup.name, "StylusCtrl keys");
-    if (ioctl(ufd, UI_DEV_SETUP, &setup) < 0 || ioctl(ufd, UI_DEV_CREATE, 0) < 0) goto fail;
+    if (ioctl(ufd, UI_DEV_SETUP, &setup) < 0) {
+        int err = errno;
+        if (err != ENOTTY && err != EINVAL) goto fail;
+        struct uinput_user_dev dev;
+        memset(&dev, 0, sizeof dev);
+        snprintf(dev.name, sizeof dev.name, "StylusCtrl keys");
+        dev.id.bustype = BUS_USB;
+        dev.id.vendor = 0x0531;
+        dev.id.product = 0x0001;
+        dev.id.version = 1;
+        if (write_all(ufd, &dev, sizeof dev) < 0 || ioctl(ufd, UI_DEV_CREATE, 0) < 0) goto fail;
+    } else if (ioctl(ufd, UI_DEV_CREATE, 0) < 0) goto fail;
     kbd_fd = ufd;
     log_msg("shortcut device StylusCtrl keys");
     return 0;
@@ -3288,8 +3376,8 @@ static void sync_keyboard(void) {
 
 static void stamp_ev(struct input_event *ev, const struct timespec *ts, int type, int code, int value) {
     memset(ev, 0, sizeof *ev);
-    ev->time.tv_sec = ts->tv_sec;
-    ev->time.tv_usec = (suseconds_t)(ts->tv_nsec / 1000);
+    ev->input_event_sec = (long)ts->tv_sec;
+    ev->input_event_usec = (long)(ts->tv_nsec / 1000);
     ev->type = (unsigned short)type;
     ev->code = (unsigned short)code;
     ev->value = value;
@@ -3721,7 +3809,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     if (!builtin) open_pen_hidraw(pen);
     char sysname[64];
     char node[64];
-    if (uinput_sysname(pen->ufd, sysname, sizeof sysname) == 0) event_node(sysname, node, sizeof node);
+    if (uinput_sysname(pen->ufd, pen->vname, sysname, sizeof sysname) == 0) event_node(sysname, node, sizeof node);
     else snprintf(node, sizeof node, "uinput");
     log_msg("%sgrabbed %s \"%s\", virtual %s, x %d-%d, y %d-%d, pressure %d-%d", builtin ? "internal " : "", path,
             source, node,
@@ -3768,7 +3856,9 @@ static void reload_config(struct pen *pens, int *npens) {
         for (int i = 0; i < *npens; i++) {
             if (pens[i].fd < 0) continue;
             int want_mount = (pens[i].direct && cfg_loaded) ? cfg.in_mount : 0;
-            if (pens[i].idc_on == cfg_loaded && pens[i].mount == want_mount) continue;
+            int want_pointer = (pens[i].direct && cfg_loaded) ? cfg.in_pointer : 0;
+            if (pens[i].idc_on == cfg_loaded && pens[i].mount == want_mount && pens[i].as_pointer == want_pointer)
+                continue;
             if (open_virtual(&pens[i]) == 0) {
                 resync_pen(&pens[i]);
                 log_msg("rebuilt %s from config", pens[i].path);

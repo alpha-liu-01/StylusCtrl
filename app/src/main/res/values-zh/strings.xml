@@ -14,29 +14,31 @@
     <string name="pen_external_short">外接</string>
     <string name="pen_internal_short">内屏</string>
 
-    <string name="buttons_hint">内屏这份要在内屏页打开抓取才会用到。</string>
+    <string name="buttons_hint">抓取内屏笔之后才用这份。</string>
     <string name="stylus_title">第一侧键</string>
-    <string name="stylus_hint">按住就是橡皮，松开回到笔尖。快捷键只点一次，按住不会连发。</string>
+    <string name="stylus_hint">按住是橡皮。快捷键点一次。</string>
     <string name="action_passthrough">原样留下</string>
     <string name="action_hold_eraser">按住为橡皮</string>
     <string name="action_shortcut">快捷键</string>
     <string name="add_key">加一个键</string>
     <string name="cancel">取消</string>
     <string name="rubber_title">橡皮位</string>
-    <string name="rubber_hint">这只板子上，尾部橡皮和笔身第二颗侧键是同一个信号。快捷键只点一次，不会按住连发。第二颗侧键松开后再按，悬停里也会再点一次。尾部橡皮要离开感应范围再进来，才会再点一次。</string>
+    <string name="rubber_hint">尾部橡皮和第二侧键共用这一位。侧键在悬停里再按会再点一次。尾部橡皮要离开感应范围再进来才会再点一次。</string>
     <string name="action_eraser">橡皮</string>
     <string name="action_stylus2">第二侧键</string>
     <string name="eraser_wins">橡皮按下时藏起笔尖工具</string>
 
-    <string name="pressure_hint">内屏这份要在内屏页打开抓取才会用到。坐标仍然原样，只改压力。</string>
+    <string name="pressure_hint">抓取内屏笔之后才用这份。只改压力。</string>
     <string name="reset">复位</string>
-    <string name="pressure_graph">横轴是手的压力，纵轴是送给系统的压力。最左节点的横位置是低位死区，低于它保持起点的输出。最右节点是高位死区，高于它顶到终点。</string>
+    <string name="pressure_graph">从左到右是手的压力，从下到上是送出的压力。左边的点是低位死区，右边的点是高位死区。</string>
 
-    <string name="internal_body">内屏笔不做区域映射。压感和快捷键在那两页里选「内屏笔」，和外接板子各存一份。这里决定要不要抓取内屏笔，以及传感器相对屏幕的安装角度。</string>
+    <string name="internal_body">内屏笔的压感和按键单独保存。这里打开抓取，并设置传感器相对屏幕的方向。</string>
     <string name="internal_switch">抓取内屏笔</string>
-    <string name="internal_detail">打开之后独占内屏笔，坐标原样送出，只改这一份压感和侧键。三星笔上的笔槽、皮套、悬停距离和 Home 键会原样送回。</string>
+    <string name="internal_detail">坐标原样送出。压感和侧键用内屏这份。笔槽、皮套、悬停和 Home 键原样送回。</string>
+    <string name="internal_pointer">按指针送出</string>
+    <string name="internal_pointer_detail">这只笔的 IDC 写着 pointer 时打开。再送一只触摸屏系统不会用。</string>
     <string name="internal_mount">传感器安装角度</string>
-    <string name="internal_mount_detail">内核坐标和屏幕的自然方向差了 90°、180° 或 270° 时选这里。写在虚拟设备上，不进任何一份预设。0° 保持内核报上来的轴。</string>
+    <string name="internal_mount_detail">笔画横竖反了或上下颠倒时选这里。0° 保持内核报上来的轴。</string>
     <string name="mount_0">安装 0°</string>
 
     <string name="preset_stretch">拉伸铺满</string>
@@ -47,7 +49,7 @@
     <string name="preset_bottom">等比靠下</string>
     <string name="preset_custom">自定义</string>
     <string name="rot_0">板子 0°</string>
-    <string name="mapping_hint">左是数位板，右是屏幕。板子方向和裁切、矩形可以一起用。屏幕转到另一个方向时，右边的比例会马上跟着变。</string>
+    <string name="mapping_hint">左是数位板，右是屏幕。</string>
 
     <string name="device_loading">正在读取…</string>
     <string name="load_config">加载配置</string>
@@ -71,19 +73,19 @@
     <string name="override_limit">每只设备最多八条覆盖。</string>
     <string name="watch_foreground">观察前台应用</string>
     <string name="watch_need_access">请允许使用情况访问，然后回到这里。</string>
-    <string name="watch_blocked">分应用还没生效。先允许使用情况访问，手感才会跟着前台应用走。</string>
+    <string name="watch_blocked">允许使用情况访问后，预设才会跟着前台应用走。</string>
     <string name="watch_running">正在跟随前台应用。</string>
     <string name="watch_on">正在观察前台应用。</string>
     <string name="watch_channel">前台应用</string>
     <string name="watch_note">手感预设跟随前台应用。</string>
-    <string name="test_hint">在下面画一笔。这里不跟页面滚动抢触控。</string>
+    <string name="test_hint">在下面画一笔。</string>
     <string name="clear_canvas">复位</string>
 
     <string name="reading_config">正在读取配置…</string>
-    <string name="no_root">没有 root。Magisk 需要允许这个应用。</string>
-    <string name="local_config">没有 root。设置写在应用目录里，系统里的守护进程读这份文件。</string>
+    <string name="no_root">没有 root。</string>
+    <string name="local_config">没有 root。守护进程读应用目录里的这份。</string>
     <string name="config_parse_failed">配置解析失败，界面用默认值</string>
-    <string name="daemon_stopped">守护进程没在跑。保存会写配置，刷上模块并重启后才生效。</string>
+    <string name="daemon_stopped">守护进程没在跑。装上模块并重启后才会启动。</string>
     <string name="daemon_pid">守护进程 pid %1$s</string>
     <string name="screen_size">\n屏幕 %1$d×%2$d</string>
     <string name="no_active_screen">\n没有读到活动中的屏幕</string>
@@ -100,8 +102,8 @@
     <string name="rubber_needs_key">%1$s橡皮位快捷键至少要一个键</string>
     <string name="writing">正在写入…</string>
     <string name="wrote_notified">已写入，守护进程会重读</string>
-    <string name="wrote_stopped">已写入。守护进程没在跑，装上模块并重启后才会生效</string>
-    <string name="wrote_local">已保存。系统里的守护进程大约一秒内会重读应用目录里的这份配置。</string>
+    <string name="wrote_stopped">已保存。守护进程没在跑。</string>
+    <string name="wrote_local">已保存。守护进程会重读。</string>
     <string name="wrote">已写入</string>
     <string name="write_failed">写入失败</string>
     <string name="no_input_devices">没有读到输入设备</string>

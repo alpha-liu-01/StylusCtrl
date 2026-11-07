@@ -1,6 +1,7 @@
 package app.stylusctrl;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -116,8 +117,20 @@ public class MainActivity extends AppCompatActivity {
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::importConfig);
 
     @Override
+    protected void attachBaseContext(Context newBase) {
+        super.attachBaseContext(newBase);
+        if (Build.VERSION.SDK_INT >= 31 && Build.VERSION.SDK_INT < 33) {
+            SystemAccent.install(this);
+        }
+    }
+
+    @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= 31 && Build.VERSION.SDK_INT < 33) {
+            SystemAccent.install(this);
+            getTheme().applyStyle(R.style.Theme_StylusCtrl, true);
+        }
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
         applyStatusBar();
@@ -464,6 +477,8 @@ public class MainActivity extends AppCompatActivity {
         showFeel(feel());
         MaterialSwitch internal = internalPage.findViewById(R.id.internal_pen);
         internal.setChecked(p.internalOn);
+        MaterialSwitch pointer = internalPage.findViewById(R.id.internal_pointer);
+        pointer.setChecked(p.internalPointer);
         checkMount(p);
         filling = false;
     }
@@ -684,6 +699,10 @@ public class MainActivity extends AppCompatActivity {
         MaterialSwitch internal = internalPage.findViewById(R.id.internal_pen);
         internal.setOnCheckedChangeListener((button, checked) -> {
             if (!filling) profile.internalOn = checked;
+        });
+        MaterialSwitch pointer = internalPage.findViewById(R.id.internal_pointer);
+        pointer.setOnCheckedChangeListener((button, checked) -> {
+            if (!filling) profile.internalPointer = checked;
         });
         com.google.android.material.chip.ChipGroup mounts = internalPage.findViewById(R.id.internal_orientation);
         mounts.setOnCheckedStateChangeListener((group, checkedIds) -> {

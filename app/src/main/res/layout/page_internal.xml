@@ -26,6 +26,20 @@
         android:text="@string/internal_detail"
         android:textAppearance="?attr/textAppearanceBodyMedium" />
 
+    <com.google.android.material.materialswitch.MaterialSwitch
+        android:id="@+id/internal_pointer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="@string/internal_pointer" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/internal_pointer_detail"
+        android:textAppearance="?attr/textAppearanceBodyMedium" />
+
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"

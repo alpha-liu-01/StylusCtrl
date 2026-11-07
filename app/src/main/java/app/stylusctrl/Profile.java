@@ -35,6 +35,8 @@ public class Profile {
     public boolean internalOn;
     /** 0, 90, 180, or 270. The panel sensor's mount, not a preset and not the screen. */
     public int internalOrientation;
+    /** Publish the virtual device as a pointer. The finger screen already owns the panel. */
+    public boolean internalPointer;
     /** When set, this replaces the built-in sec_e-pen / I2C rule. */
     public boolean hasInternalMatch;
     public String internalName = "";
@@ -141,6 +143,7 @@ public class Profile {
             else if (mount == 2) mount = 180;
             else if (mount == 3) mount = 270;
             if (mount == 90 || mount == 180 || mount == 270) p.internalOrientation = mount;
+            p.internalPointer = internal.optBoolean("pointer", false);
             readInternalMatch(internal.optJSONObject("match"), p);
             boolean ownPressure = readFeelPressure(internal.optJSONObject("pressure"), p.internal);
             boolean ownButtons = readFeelButtons(internal.optJSONObject("buttons"), internal.optJSONObject("tools"), p.internal);
@@ -410,6 +413,7 @@ public class Profile {
         b.append("  \"internal\": {\n");
         b.append("    \"enabled\": ").append(internalOn);
         b.append(",\n    \"orientation\": ").append(internalOrientation);
+        b.append(",\n    \"pointer\": ").append(internalPointer);
         if (hasInternalMatch) b.append(",\n    \"match\": ").append(internalMatchJson());
         b.append(",\n");
         b.append("    \"pressure\": ").append(pressureJson(internal)).append(",\n");

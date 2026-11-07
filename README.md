@@ -24,7 +24,7 @@ tools/build-apk.sh
 
 ## Installation
 
-The module zip is `out/stylusctrl.zip`. Flash it in Magisk and reboot. The settings app is `out/stylusctrl.apk`. Both can be found in releases.
+`tools/pack-module.sh` writes `out/stylusctrl-arm64.zip` and `out/stylusctrl-arm.zip`. Flash the one that matches the device in Magisk and reboot. `tools/build-apk.sh` writes `out/stylusctrl-arm64.apk` and `out/stylusctrl-arm.apk`. The app has no native code, so either apk installs on either device. The zip is the one that has to match: it carries `stylusctld`.
 
 ## License
 

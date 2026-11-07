@@ -17,29 +17,31 @@
     <string name="pen_external_short">External</string>
     <string name="pen_internal_short">Internal</string>
 
-    <string name="buttons_hint">The internal profile is used only after grab is turned on from the Internal page.</string>
+    <string name="buttons_hint">Used after the internal pen is grabbed.</string>
     <string name="stylus_title">First side button</string>
-    <string name="stylus_hint">Hold for the eraser, and release to return to the pen tip. A shortcut clicks once and does not repeat while held.</string>
+    <string name="stylus_hint">Hold for the eraser. A shortcut clicks once.</string>
     <string name="action_passthrough">Leave as is</string>
     <string name="action_hold_eraser">Hold for eraser</string>
     <string name="action_shortcut">Shortcut</string>
     <string name="add_key">Add a key</string>
     <string name="cancel">Cancel</string>
     <string name="rubber_title">Eraser slot</string>
-    <string name="rubber_hint">On this tablet the tail eraser and the pen\'s second side button are the same signal. A shortcut clicks once and does not repeat while held. The second side button can be pressed again without leaving hover. The tail eraser clicks again only after it leaves the sensing range and comes back.</string>
+    <string name="rubber_hint">The tail eraser and the second side button share this slot. The side button clicks again while hovering. The tail eraser clicks again after it leaves and comes back.</string>
     <string name="action_eraser">Eraser</string>
     <string name="action_stylus2">Second side button</string>
     <string name="eraser_wins">Hide the pen tool while the eraser is down</string>
 
-    <string name="pressure_hint">The internal profile is used only after grab is turned on from the Internal page. Coordinates stay unchanged; only pressure is rewritten.</string>
+    <string name="pressure_hint">Used after the internal pen is grabbed. Only pressure changes.</string>
     <string name="reset">Reset</string>
-    <string name="pressure_graph">Horizontal is how hard you press. Vertical is the pressure sent to the system. The left node\'s horizontal position is the low deadzone: below it, output stays at the start. The right node is the high deadzone: above it, output pins to the end.</string>
+    <string name="pressure_graph">Left to right is how hard you press. Bottom to top is the pressure sent on. The left point is the low deadzone. The right point is the high one.</string>
 
-    <string name="internal_body">The internal pen has no area mapping. Choose Internal pen on the pressure and button pages; that profile is stored separately from the external tablet. This page decides whether to grab the internal pen, and how its sensor sits on the panel.</string>
+    <string name="internal_body">The internal pen has its own pressure and buttons. This page turns grabbing on, and sets how the sensor sits on the panel.</string>
     <string name="internal_switch">Grab the internal pen</string>
-    <string name="internal_detail">After it is on, the built-in pen is grabbed. Coordinates pass through, and only this profile\'s pressure and side buttons change. On the Samsung pen, the dock, cover, hover distance, and the original Home key are forwarded unchanged.</string>
+    <string name="internal_detail">Coordinates stay as reported. Pressure and side buttons use the internal profile. The dock, cover, hover, and Home key pass through.</string>
+    <string name="internal_pointer">Report as a pointer</string>
+    <string name="internal_pointer_detail">On when this pen\'s IDC says pointer. A second touchscreen is left unused.</string>
     <string name="internal_mount">Sensor mount</string>
-    <string name="internal_mount_detail">Use this when the kernel axes are turned relative to the screen\'s natural orientation. It is written onto the virtual device and is not part of a preset. 0° leaves the axes as the kernel reports them.</string>
+    <string name="internal_mount_detail">Use this when strokes come out sideways or upside down. 0° keeps the kernel axes.</string>
     <string name="mount_0">Mount 0°</string>
     <string name="mount_90" translatable="false">90°</string>
     <string name="mount_180" translatable="false">180°</string>
@@ -56,7 +58,7 @@
     <string name="rot_90" translatable="false">90°</string>
     <string name="rot_180" translatable="false">180°</string>
     <string name="rot_270" translatable="false">270°</string>
-    <string name="mapping_hint">Left is the tablet, right is the screen. Tablet rotation can be combined with the crop and the rectangles. When the screen turns, the proportions on the right follow immediately.</string>
+    <string name="mapping_hint">Left is the tablet, right is the screen.</string>
 
     <string name="device_loading">Reading…</string>
     <string name="load_config">Load configuration</string>
@@ -80,19 +82,19 @@
     <string name="override_limit">Eight overrides per device.</string>
     <string name="watch_foreground">Watch the foreground app</string>
     <string name="watch_need_access">Allow usage access, then come back.</string>
-    <string name="watch_blocked">Per-app presets are off. Allow usage access so the feel follows the foreground app.</string>
+    <string name="watch_blocked">Allow usage access so presets follow the foreground app.</string>
     <string name="watch_running">Following the foreground app.</string>
     <string name="watch_on">Watching the foreground app.</string>
     <string name="watch_channel">Foreground app</string>
     <string name="watch_note">Stylus presets follow the foreground app.</string>
-    <string name="test_hint">Draw a stroke below. This page does not fight scrolling for the touch.</string>
+    <string name="test_hint">Draw below.</string>
     <string name="clear_canvas">Reset</string>
 
     <string name="reading_config">Reading the configuration…</string>
-    <string name="no_root">No root. Magisk needs to allow this app.</string>
-    <string name="local_config">No root. Settings stay in the app directory, and the system daemon reads that file.</string>
+    <string name="no_root">No root.</string>
+    <string name="local_config">No root. The daemon reads the copy in the app directory.</string>
     <string name="config_parse_failed">The configuration could not be parsed. The screen is using defaults.</string>
-    <string name="daemon_stopped">The daemon is not running. Saving writes the configuration. It takes effect after the module is installed and the device reboots.</string>
+    <string name="daemon_stopped">The daemon is not running. It starts after the module is installed and the device reboots.</string>
     <string name="daemon_pid">Daemon pid %1$s</string>
     <string name="screen_size">\nScreen %1$d×%2$d</string>
     <string name="no_active_screen">\nNo active screen was read</string>
@@ -109,8 +111,8 @@
     <string name="rubber_needs_key">The %1$s eraser shortcut needs at least one key.</string>
     <string name="writing">Writing…</string>
     <string name="wrote_notified">Saved. The daemon will reread it.</string>
-    <string name="wrote_stopped">Saved. The daemon is not running. It takes effect after the module is installed and the device reboots.</string>
-    <string name="wrote_local">Saved. The system daemon rereads the app file within a second.</string>
+    <string name="wrote_stopped">Saved. The daemon is not running.</string>
+    <string name="wrote_local">Saved. The daemon rereads it.</string>
     <string name="wrote">Saved.</string>
     <string name="write_failed">Write failed.</string>
     <string name="no_input_devices">No input devices were read</string>
