@@ -1,16 +1,33 @@
 package app.stylusctrl;
 
+import android.Manifest;
+import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.content.pm.ResolveInfo;
+import android.graphics.Color;
 import android.graphics.Point;
 import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.view.Display;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
+import android.widget.EditText;
+import android.widget.ImageView;
+import android.widget.Spinner;
 import android.widget.TextView;
+
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
+import androidx.appcompat.app.AlertDialog;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -20,6 +37,7 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.google.android.material.color.MaterialColors;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.google.android.material.chip.ChipGroup;
@@ -31,6 +49,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.text.Collator;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -45,13 +67,18 @@ public class MainActivity extends AppCompatActivity {
 
     private View root;
     private TextView pageTitle;
+    private TextView editTarget;
     private TextView pageSub;
     private View mappingPage;
     private View pressurePage;
     private View buttonsPage;
     private View testPage;
     private View internalPage;
+    private View appsPage;
     private View devicePage;
+    private RecyclerView appList;
+    private TextView watchState;
+    private final List<AppEntry> shownApps = new ArrayList<>();
     private MappingBoard board;
     private ChipGroup presets;
     private ChipGroup rotations;
@@ -70,6 +97,21 @@ public class MainActivity extends AppCompatActivity {
     private long externalGoneAt = -1;
     private static final long EXTERNAL_GAP_MS = 4000;
     private String statusPrefix = "";
+    private boolean externalPresent;
+    private String externalTitle = "";
+    /** Null while the other pages edit this device's baseline. */
+    private String editPackage;
+    private String editAppLabel = "";
+    private String editingPresetId = "";
+    private boolean editorLive;
+    private int bindingRows;
+    private final List<AppEntry> apps = new ArrayList<>();
+
+    private static final class AppEntry {
+        String pkg;
+        String label;
+        Drawable icon;
+    }
     private final ActivityResultLauncher<String[]> openConfig =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::importConfig);
 
@@ -86,6 +128,7 @@ public class MainActivity extends AppCompatActivity {
             return insets;
         });
         pageTitle = findViewById(R.id.page_title);
+        editTarget = findViewById(R.id.edit_target);
         pageSub = findViewById(R.id.page_sub);
         android.widget.FrameLayout pages = findViewById(R.id.pages);
         LayoutInflater inflater = getLayoutInflater();
@@ -94,12 +137,14 @@ public class MainActivity extends AppCompatActivity {
         buttonsPage = inflater.inflate(R.layout.page_buttons, pages, false);
         testPage = inflater.inflate(R.layout.page_test, pages, false);
         internalPage = inflater.inflate(R.layout.page_internal, pages, false);
+        appsPage = inflater.inflate(R.layout.page_apps, pages, false);
         devicePage = inflater.inflate(R.layout.page_device, pages, false);
         pages.addView(mappingPage);
         pages.addView(pressurePage);
         pages.addView(buttonsPage);
         pages.addView(testPage);
         pages.addView(internalPage);
+        pages.addView(appsPage);
         pages.addView(devicePage);
 
         board = mappingPage.findViewById(R.id.board);
@@ -110,6 +155,30 @@ public class MainActivity extends AppCompatActivity {
         status = devicePage.findViewById(R.id.status);
         devicePage.findViewById(R.id.load_config).setOnClickListener(v ->
                 openConfig.launch(new String[] {"application/json", "text/plain", "*/*"}));
+        pressurePage.findViewById(R.id.pressure_device).setVisibility(View.GONE);
+        buttonsPage.findViewById(R.id.buttons_device).setVisibility(View.GONE);
+        appList = appsPage.findViewById(R.id.app_rows);
+        appList.setLayoutManager(new LinearLayoutManager(this));
+        appList.setHasFixedSize(true);
+        appList.setItemAnimator(null);
+        appList.setAdapter(new AppAdapter());
+        watchState = appsPage.findViewById(R.id.watch_state);
+        appsPage.findViewById(R.id.watch_foreground).setOnClickListener(v -> watchForeground());
+        refreshWatchState();
+        MaterialButtonToggleGroup appsDevice = appsPage.findViewById(R.id.apps_device);
+        appsDevice.check(R.id.apps_external);
+        appsDevice.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+            if (!isChecked || filling) return;
+            chooseEditDevice(checkedId == R.id.apps_internal);
+        });
+        io.execute(() -> {
+            List<AppEntry> loaded = loadApps();
+            runOnUiThread(() -> {
+                apps.clear();
+                apps.addAll(loaded);
+                bindApps();
+            });
+        });
         TestCanvas canvas = testPage.findViewById(R.id.canvas);
         TextView sample = testPage.findViewById(R.id.sample);
         canvas.setSampleListener(sample::setText);
@@ -148,6 +217,8 @@ public class MainActivity extends AppCompatActivity {
         resumed = true;
         root.removeCallbacks(watchDevices);
         root.post(watchDevices);
+        refreshWatchState();
+        if (ForegroundWatch.allowed(this)) startWatch();
     }
 
     @Override
@@ -204,6 +275,7 @@ public class MainActivity extends AppCompatActivity {
         buttonsPage.setVisibility(id == R.id.nav_keys ? View.VISIBLE : View.GONE);
         testPage.setVisibility(id == R.id.nav_test ? View.VISIBLE : View.GONE);
         internalPage.setVisibility(id == R.id.nav_internal ? View.VISIBLE : View.GONE);
+        appsPage.setVisibility(id == R.id.nav_apps ? View.VISIBLE : View.GONE);
         devicePage.setVisibility(id == R.id.nav_device ? View.VISIBLE : View.GONE);
         pageTitle.setText(item.getTitle());
         return true;
@@ -238,15 +310,19 @@ public class MainActivity extends AppCompatActivity {
             screenH = snap.screenH;
         }
         boolean parsed = true;
+        boolean hadTable = false;
         if (snap.configText != null) {
             try {
                 profile = Profile.parse(snap.configText);
+                hadTable = profile.hasPresetTable;
             } catch (Exception e) {
                 parsed = false;
                 pageSub.setText(R.string.config_parse_failed);
             }
         }
-        showProfile(profile);
+        if (parsed) adoptLibrary();
+        else showProfile(profile);
+        if (parsed && !hadTable && (snap.configText != null || snap.local)) writeConfig(false);
         if (snap.local) {
             int showW = snap.screenW > 0 ? snap.screenW : screenW;
             int showH = snap.screenH > 0 ? snap.screenH : screenH;
@@ -278,12 +354,18 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         status.setText(statusPrefix + "\n" + RootStore.axesSummary(this, snap.pens));
-        if (external != null) externalGoneAt = -1;
-        else if (holdExternal()) {
+        if (external != null) {
+            externalGoneAt = -1;
+            externalPresent = true;
+            if (external.name != null && !external.name.isEmpty()) externalTitle = external.name;
+        } else if (holdExternal()) {
             pageSub.setVisibility(View.VISIBLE);
+            updateMappingNav();
             return;
+        } else {
+            externalPresent = false;
         }
-        setMappingVisible(external != null);
+        updateMappingNav();
         if (external != null) adoptAxes(external);
         String line;
         if (external == null) line = getString(R.string.no_external);
@@ -341,7 +423,7 @@ public class MainActivity extends AppCompatActivity {
             board.setMapping(profile.mode, profile.crop, profile.hasRect, profile.rect,
                     profile.hasScreen, toFloat(profile.screen));
             stampDisplay();
-            String json = profile.toJson();
+            String json = configJson();
             io.execute(() -> RootStore.write(MainActivity.this, json));
         }
         offerMatch(pen);
@@ -498,7 +580,7 @@ public class MainActivity extends AppCompatActivity {
     /** Writes the panel size into the config when it changes. The daemon reads that instead of dumpsys. */
     private void publishDisplay() {
         if (!stampDisplay()) return;
-        String json = profile.toJson();
+        String json = configJson();
         io.execute(() -> RootStore.write(MainActivity.this, json));
     }
 
@@ -682,7 +764,7 @@ public class MainActivity extends AppCompatActivity {
         if (!keysOk(profile.external, getString(R.string.pen_external))
                 || !keysOk(profile.internal, getString(R.string.pen_internal))) return;
         stampDisplay();
-        String json = profile.toJson();
+        String json = configJson();
         io.execute(() -> {
             String code = RootStore.write(MainActivity.this, json);
             runOnUiThread(() -> {
@@ -734,6 +816,469 @@ public class MainActivity extends AppCompatActivity {
             }
             return out.toString(StandardCharsets.UTF_8);
         }
+    }
+
+    private void adoptLibrary() {
+        PresetStore.install(this, profile, getString(R.string.preset_current));
+        editorLive = false;
+        editPackage = null;
+        editAppLabel = "";
+        editingPresetId = "";
+        loadPreset(baselineId());
+        editorLive = true;
+        refreshEditLabel();
+        updateMappingNav();
+        bindApps();
+    }
+
+    private String configJson() {
+        PresetStore.capture(profile, editingPresetId);
+        return profile.toJson();
+    }
+
+    private void writeConfig() {
+        writeConfig(true);
+    }
+
+    private void writeConfig(boolean announce) {
+        String json = configJson();
+        io.execute(() -> {
+            String code = RootStore.write(MainActivity.this, json);
+            if (!announce) return;
+            runOnUiThread(() -> Snackbar.make(root, writeMessage(code), Snackbar.LENGTH_LONG).show());
+        });
+    }
+
+    private String deviceKey() {
+        return editingInternal ? "internal" : "external";
+    }
+
+    private String baselineId() {
+        PresetStore.Device device = PresetStore.device(deviceKey());
+        return device == null || device.baseline == null ? "" : device.baseline;
+    }
+
+    private String deviceTitle() {
+        if (editingInternal) return getString(R.string.pen_internal_short);
+        if (externalTitle != null && !externalTitle.isEmpty()) return externalTitle;
+        return getString(R.string.pen_external);
+    }
+
+    private void refreshEditLabel() {
+        if (editTarget == null) return;
+        if (editPackage == null) {
+            editTarget.setText(getString(R.string.edit_global, deviceTitle()));
+            return;
+        }
+        PresetStore.Item item = PresetStore.find(editingPresetId);
+        String preset = item == null ? editingPresetId : item.name;
+        editTarget.setText(getString(R.string.edit_app, deviceTitle(), editAppLabel, preset));
+    }
+
+    private void updateMappingNav() {
+        setMappingVisible(externalPresent && !editingInternal);
+    }
+
+    private void flushEditor() {
+        if (!editorLive || editingPresetId == null || editingPresetId.isEmpty()) return;
+        PresetStore.capture(profile, editingPresetId);
+    }
+
+    private void loadPreset(String id) {
+        PresetStore.Item item = PresetStore.find(id);
+        if (item == null) return;
+        boolean was = editorLive;
+        editorLive = false;
+        profile.copyFeelFrom(item);
+        editingPresetId = id;
+        showProfile(profile);
+        editorLive = was;
+    }
+
+    private void focusGlobal() {
+        String next = baselineId();
+        if (editPackage == null && next.equals(editingPresetId)) {
+            refreshEditLabel();
+            refreshSelection();
+            return;
+        }
+        flushEditor();
+        editPackage = null;
+        editAppLabel = "";
+        loadPreset(next);
+        refreshEditLabel();
+        updateMappingNav();
+        refreshSelection();
+    }
+
+    private void focusApp(String pkg, String label, String presetId) {
+        if (presetId == null || presetId.isEmpty()) {
+            focusGlobal();
+            return;
+        }
+        if (pkg.equals(editPackage) && presetId.equals(editingPresetId)) {
+            refreshEditLabel();
+            refreshSelection();
+            return;
+        }
+        flushEditor();
+        editPackage = pkg;
+        editAppLabel = label;
+        loadPreset(presetId);
+        refreshEditLabel();
+        updateMappingNav();
+        refreshSelection();
+    }
+
+    private void chooseEditDevice(boolean internal) {
+        if (internal == editingInternal && editorLive) return;
+        flushEditor();
+        editingInternal = internal;
+        editPackage = null;
+        editAppLabel = "";
+        editorLive = false;
+        editingPresetId = "";
+        loadPreset(baselineId());
+        editorLive = true;
+        refreshEditLabel();
+        updateMappingNav();
+        bindApps();
+    }
+
+    private List<AppEntry> loadApps() {
+        List<AppEntry> list = new ArrayList<>();
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        PackageManager pm = getPackageManager();
+        Intent launch = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        for (ResolveInfo info : pm.queryIntentActivities(launch, 0)) {
+            if (info.activityInfo == null) continue;
+            String pkg = info.activityInfo.packageName;
+            if (pkg == null || pkg.equals(getPackageName()) || !seen.add(pkg)) continue;
+            AppEntry entry = new AppEntry();
+            entry.pkg = pkg;
+            entry.label = info.loadLabel(pm).toString();
+            entry.icon = info.loadIcon(pm);
+            list.add(entry);
+        }
+        list.sort(Comparator.comparing(entry -> entry.label, Collator.getInstance()));
+        return list;
+    }
+
+    private void bindApps() {
+        shownApps.clear();
+        AppEntry global = new AppEntry();
+        global.pkg = "";
+        global.label = getString(R.string.app_global);
+        shownApps.add(global);
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (AppEntry entry : apps) {
+            seen.add(entry.pkg);
+            shownApps.add(entry);
+        }
+        PresetStore.Device device = PresetStore.device(deviceKey());
+        if (device != null) {
+            for (String pkg : device.apps.keySet()) {
+                if (seen.contains(pkg)) continue;
+                AppEntry extra = new AppEntry();
+                extra.pkg = pkg;
+                extra.label = pkg;
+                try {
+                    extra.icon = getPackageManager().getApplicationIcon(pkg);
+                    extra.label = getPackageManager().getApplicationLabel(
+                            getPackageManager().getApplicationInfo(pkg, 0)).toString();
+                } catch (PackageManager.NameNotFoundException ignored) {
+                }
+                shownApps.add(extra);
+            }
+        }
+        if (appList != null && appList.getAdapter() != null) appList.getAdapter().notifyDataSetChanged();
+    }
+
+    private AppEntry rowAt(RecyclerView.ViewHolder holder) {
+        int pos = holder.getBindingAdapterPosition();
+        if (pos < 0 || pos >= shownApps.size()) return null;
+        return shownApps.get(pos);
+    }
+
+    private String spinnerPreset(Spinner spinner) {
+        Object tag = spinner.getTag();
+        int position = spinner.getSelectedItemPosition();
+        if (!(tag instanceof List) || position < 0 || position >= ((List<?>) tag).size()) return "";
+        String id = String.valueOf(((List<?>) tag).get(position));
+        return "null".equals(id) ? "" : id;
+    }
+
+    private void deletePreset(Spinner spinner) {
+        String id = spinnerPreset(spinner);
+        if (id.isEmpty()) {
+            Snackbar.make(root, R.string.preset_need_selection, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        for (PresetStore.Device device : PresetStore.devices()) {
+            if (id.equals(device.baseline)) {
+                Snackbar.make(root, R.string.preset_is_baseline, Snackbar.LENGTH_LONG).show();
+                return;
+            }
+        }
+        boolean editingThis = id.equals(editingPresetId);
+        PresetStore.delete(id);
+        if (editingThis) {
+            editingPresetId = "";
+            editPackage = null;
+            editAppLabel = "";
+            focusGlobal();
+        }
+        bindApps();
+        writeConfig(false);
+        Snackbar.make(root, R.string.preset_deleted, Snackbar.LENGTH_LONG).show();
+    }
+
+    private String devicePreset(String pkg) {
+        PresetStore.Device device = PresetStore.device(deviceKey());
+        if (device == null) return null;
+        String id = device.apps.get(pkg);
+        return id == null || id.isEmpty() ? null : id;
+    }
+
+    private void fillPresetSpinner(Spinner spinner, String selectedId) {
+        List<String> ids = new ArrayList<>();
+        List<String> names = new ArrayList<>();
+        ids.add("");
+        names.add(getString(R.string.preset_pick));
+        int selection = 0;
+        int index = 1;
+        for (PresetStore.Item item : PresetStore.items()) {
+            ids.add(item.id);
+            names.add(item.name);
+            if (item.id.equals(selectedId)) selection = index;
+            index++;
+        }
+        bindingRows++;
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, names);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinner.setAdapter(adapter);
+        spinner.setTag(ids);
+        spinner.setSelection(selection);
+        bindingRows--;
+    }
+
+    private void promptRename(Spinner spinner) {
+        String id = spinnerPreset(spinner);
+        PresetStore.Item item = id.isEmpty() ? null : PresetStore.find(id);
+        if (item == null) {
+            Snackbar.make(root, R.string.preset_need_selection, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        EditText input = new EditText(this);
+        input.setHint(R.string.preset_name);
+        input.setText(item.name);
+        if (input.getText() != null) input.setSelection(input.getText().length());
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.preset_rename)
+                .setView(input)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.save, (dialog, which) -> {
+                    String name = input.getText() == null ? "" : input.getText().toString();
+                    if (!PresetStore.rename(id, name)) return;
+                    refreshEditLabel();
+                    if (appList != null && appList.getAdapter() != null) appList.getAdapter().notifyDataSetChanged();
+                })
+                .show();
+    }
+
+    private void promptNewPreset(AppEntry entry) {
+        if (!PresetStore.canAdd()) {
+            Snackbar.make(root, R.string.preset_limit, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        EditText input = new EditText(this);
+        input.setHint(R.string.preset_name);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.preset_add)
+                .setView(input)
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.save, (dialog, which) -> {
+                    String name = input.getText() == null ? "" : input.getText().toString();
+                    flushEditor();
+                    PresetStore.Item created = PresetStore.fork(baselineId(), name);
+                    if (created == null) {
+                        Snackbar.make(root, R.string.preset_limit, Snackbar.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (!PresetStore.addOverride(deviceKey(), entry.pkg, created.id)) {
+                        PresetStore.delete(created.id);
+                        Snackbar.make(root, R.string.override_limit, Snackbar.LENGTH_LONG).show();
+                        return;
+                    }
+                    focusApp(entry.pkg, entry.label, created.id);
+                    bindApps();
+                    writeConfig(false);
+                    if (!ForegroundWatch.allowed(this)) watchForeground();
+                })
+                .show();
+    }
+
+    private void refreshSelection() {
+        if (appList == null || appList.getAdapter() == null) return;
+        appList.getAdapter().notifyItemRangeChanged(0, appList.getAdapter().getItemCount(), "sel");
+    }
+
+    private final class AppAdapter extends RecyclerView.Adapter<AppAdapter.Holder> {
+        @Override
+        public Holder onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
+            View row = getLayoutInflater().inflate(R.layout.row_app, parent, false);
+            return new Holder(row);
+        }
+
+        @Override
+        public void onBindViewHolder(Holder holder, int position, List<Object> payloads) {
+            if (!payloads.isEmpty()) {
+                paint(holder, position);
+                return;
+            }
+            super.onBindViewHolder(holder, position, payloads);
+        }
+
+        @Override
+        public void onBindViewHolder(Holder holder, int position) {
+            AppEntry entry = shownApps.get(position);
+            boolean global = entry.pkg.isEmpty();
+            holder.label.setText(global ? getString(R.string.app_global) : entry.label);
+            if (global) {
+                holder.icon.setImageResource(editingInternal
+                        ? android.R.drawable.ic_menu_slideshow : android.R.drawable.ic_menu_edit);
+            } else if (entry.icon != null) holder.icon.setImageDrawable(entry.icon);
+            holder.mode.setVisibility(global ? View.GONE : View.VISIBLE);
+            if (global) {
+                holder.customRow.setVisibility(View.GONE);
+            } else {
+                PresetStore.Device device = PresetStore.device(deviceKey());
+                String assigned = device == null ? null : device.apps.get(entry.pkg);
+                boolean custom = assigned != null && !assigned.isEmpty();
+                bindingRows++;
+                fillPresetSpinner(holder.spinner, assigned);
+                holder.mode.check(custom ? R.id.app_custom : R.id.app_default);
+                holder.customRow.setVisibility(custom ? View.VISIBLE : View.GONE);
+                bindingRows--;
+            }
+            paint(holder, position);
+        }
+
+        private void paint(Holder holder, int position) {
+            AppEntry entry = shownApps.get(position);
+            String current = editPackage == null ? "" : editPackage;
+            int color = entry.pkg.equals(current)
+                    ? MaterialColors.getColor(holder.itemView, com.google.android.material.R.attr.colorSecondaryContainer)
+                    : Color.TRANSPARENT;
+            holder.itemView.setBackgroundColor(color);
+        }
+
+        @Override
+        public int getItemCount() {
+            return shownApps.size();
+        }
+
+        private void openRow(Holder holder) {
+            AppEntry entry = rowAt(holder);
+            if (entry == null) return;
+            if (entry.pkg.isEmpty()) {
+                focusGlobal();
+                return;
+            }
+            String current = devicePreset(entry.pkg);
+            if (current == null) focusGlobal();
+            else focusApp(entry.pkg, entry.label, current);
+        }
+
+        final class Holder extends RecyclerView.ViewHolder {
+            final ImageView icon;
+            final TextView label;
+            final View customRow;
+            final Spinner spinner;
+            final MaterialButtonToggleGroup mode;
+
+            Holder(View row) {
+                super(row);
+                icon = row.findViewById(R.id.app_icon);
+                label = row.findViewById(R.id.app_label);
+                customRow = row.findViewById(R.id.app_custom_row);
+                spinner = row.findViewById(R.id.app_presets);
+                mode = row.findViewById(R.id.app_mode);
+                View.OnClickListener select = v -> openRow(this);
+                row.setOnClickListener(select);
+                label.setOnClickListener(select);
+                icon.setOnClickListener(select);
+                mode.addOnButtonCheckedListener((group, checkedId, isChecked) -> {
+                    if (!isChecked || bindingRows > 0) return;
+                    AppEntry entry = rowAt(this);
+                    if (entry == null || entry.pkg.isEmpty()) return;
+                    if (checkedId == R.id.app_default) {
+                        PresetStore.removeOverride(deviceKey(), entry.pkg);
+                        customRow.setVisibility(View.GONE);
+                        if (entry.pkg.equals(editPackage)) focusGlobal();
+                        else refreshSelection();
+                        writeConfig(false);
+                    } else {
+                        customRow.setVisibility(View.VISIBLE);
+                        fillPresetSpinner(spinner, devicePreset(entry.pkg));
+                        if (!ForegroundWatch.allowed(MainActivity.this)) watchForeground();
+                    }
+                });
+                spinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                    @Override
+                    public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                        if (bindingRows > 0 || position <= 0) return;
+                        AppEntry entry = rowAt(Holder.this);
+                        if (entry == null || entry.pkg.isEmpty()) return;
+                        Object tag = parent.getTag();
+                        if (!(tag instanceof List) || position >= ((List<?>) tag).size()) return;
+                        Object value = ((List<?>) tag).get(position);
+                        String presetId = value == null ? "" : value.toString();
+                        if (presetId.isEmpty() || presetId.equals(devicePreset(entry.pkg))) return;
+                        if (!PresetStore.addOverride(deviceKey(), entry.pkg, presetId)) {
+                            Snackbar.make(root, R.string.override_limit, Snackbar.LENGTH_LONG).show();
+                            return;
+                        }
+                        focusApp(entry.pkg, entry.label, presetId);
+                        writeConfig(false);
+                    }
+
+                    @Override
+                    public void onNothingSelected(AdapterView<?> parent) {
+                    }
+                });
+                row.findViewById(R.id.app_rename).setOnClickListener(v -> promptRename(spinner));
+                row.findViewById(R.id.app_add).setOnClickListener(v -> {
+                    AppEntry entry = rowAt(this);
+                    if (entry != null && !entry.pkg.isEmpty()) promptNewPreset(entry);
+                });
+                row.findViewById(R.id.app_delete).setOnClickListener(v -> deletePreset(spinner));
+            }
+        }
+    }
+
+    private void refreshWatchState() {
+        if (watchState == null) return;
+        watchState.setText(ForegroundWatch.allowed(this) ? R.string.watch_running : R.string.watch_blocked);
+    }
+
+    private void watchForeground() {
+        if (!ForegroundWatch.allowed(this)) {
+            startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+            Snackbar.make(root, R.string.watch_need_access, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {Manifest.permission.POST_NOTIFICATIONS}, 41);
+        }
+        startWatch();
+        Snackbar.make(root, R.string.watch_on, Snackbar.LENGTH_LONG).show();
+    }
+
+    private void startWatch() {
+        Intent intent = new Intent(this, ForegroundWatch.class);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
+        else startService(intent);
     }
 
     private String writeMessage(String code) {

@@ -45,6 +45,10 @@ public class Profile {
     public boolean internalPenSet;
     public boolean internalPen;
     public boolean internalMultitouch;
+    /** Set when the file has a presets object or a devices array. */
+    public boolean hasPresetTable;
+    public final java.util.List<PresetStore.Item> parsedPresets = new java.util.ArrayList<>();
+    public final java.util.List<PresetStore.Device> parsedDevices = new java.util.ArrayList<>();
 
     /** Pressure curve and side buttons for one pen. Mapping is not part of this. */
     public static final class Feel {
@@ -138,7 +142,137 @@ public class Profile {
         } else {
             p.internal.copyFrom(p.external);
         }
+        JSONObject presets = root.optJSONObject("presets");
+        JSONArray devices = root.optJSONArray("devices");
+        if (presets != null || devices != null) {
+            p.hasPresetTable = true;
+            if (presets != null) {
+                java.util.Iterator<String> keys = presets.keys();
+                while (keys.hasNext()) {
+                    String id = keys.next();
+                    JSONObject body = presets.optJSONObject(id);
+                    if (body != null) p.parsedPresets.add(readPreset(id, body));
+                }
+            }
+            if (devices != null) {
+                for (int i = 0; i < devices.length(); i++) {
+                    JSONObject one = devices.optJSONObject(i);
+                    if (one != null) p.parsedDevices.add(readDevice(one));
+                }
+            }
+        }
         return p;
+    }
+
+    static PresetStore.Item readPreset(String id, JSONObject body) throws Exception {
+        PresetStore.Item item = new PresetStore.Item();
+        item.id = id;
+        item.name = id;
+        item.external = new Feel();
+        JSONObject mapping = body.optJSONObject("mapping");
+        if (mapping != null) {
+            item.mode = mapping.optString("mode", item.mode);
+            item.crop = mapping.optString("crop", item.crop);
+            JSONArray rect = mapping.optJSONArray("rect");
+            if (rect != null && rect.length() == 4) {
+                item.hasRect = true;
+                for (int i = 0; i < 4; i++) item.rect[i] = rect.getInt(i);
+            }
+            JSONArray screen = mapping.optJSONArray("screen");
+            if (screen != null && screen.length() == 4) {
+                item.hasScreen = true;
+                for (int i = 0; i < 4; i++) item.screen[i] = screen.getDouble(i);
+            }
+            JSONArray span = mapping.optJSONArray("span");
+            if (span != null && span.length() == 2) {
+                item.hasSpan = true;
+                item.spanX = span.getInt(0);
+                item.spanY = span.getInt(1);
+            }
+            int rotation = mapping.optInt("rotation", 0);
+            if (rotation == 1) rotation = 90;
+            else if (rotation == 2) rotation = 180;
+            else if (rotation == 3) rotation = 270;
+            if (rotation == 90 || rotation == 180 || rotation == 270) item.rotation = rotation;
+        }
+        readFeelPressure(body.optJSONObject("pressure"), item.external);
+        readFeelButtons(body.optJSONObject("buttons"), body.optJSONObject("tools"), item.external);
+        JSONObject internal = body.optJSONObject("internal");
+        if (internal != null) {
+            boolean ownPressure = readFeelPressure(internal.optJSONObject("pressure"), item.internal);
+            boolean ownButtons = readFeelButtons(internal.optJSONObject("buttons"), internal.optJSONObject("tools"), item.internal);
+            if (!ownPressure) copyPressure(item.external, item.internal);
+            if (!ownButtons) copyButtons(item.external, item.internal);
+        } else {
+            item.internal.copyFrom(item.external);
+        }
+        return item;
+    }
+
+    static PresetStore.Device readDevice(JSONObject one) {
+        PresetStore.Device device = new PresetStore.Device();
+        device.id = one.optString("id", "");
+        device.baseline = one.optString("baseline", "");
+        JSONObject match = one.optJSONObject("match");
+        if (match != null) {
+            device.vendor = match.optString("vendor", "");
+            device.product = match.optString("product", "");
+            device.name = match.optString("name", "");
+            device.namePrefix = match.optString("namePrefix", "");
+            device.bus = match.optString("bus", "");
+            if (match.has("direct")) {
+                device.directSet = true;
+                device.direct = match.optBoolean("direct");
+            }
+            if (match.has("pen")) {
+                device.penSet = true;
+                device.pen = match.optBoolean("pen");
+            }
+            if (match.has("multitouch")) {
+                device.multitouchSet = true;
+                device.multitouch = match.optBoolean("multitouch");
+            }
+        }
+        JSONObject apps = one.optJSONObject("apps");
+        if (apps != null) {
+            java.util.Iterator<String> keys = apps.keys();
+            while (keys.hasNext()) {
+                String pkg = keys.next();
+                device.apps.put(pkg, apps.optString(pkg, ""));
+            }
+        }
+        return device;
+    }
+
+    public void copyFeelTo(PresetStore.Item item) {
+        item.mode = mode;
+        item.crop = crop;
+        item.rotation = rotation;
+        item.hasRect = hasRect;
+        item.rect = rect.clone();
+        item.hasScreen = hasScreen;
+        item.screen = screen.clone();
+        item.hasSpan = hasSpan;
+        item.spanX = spanX;
+        item.spanY = spanY;
+        item.external.copyFrom(external);
+        item.internal.copyFrom(internal);
+    }
+
+    /** Mapping and both feels. Display, match, and whether the internal pen is grabbed stay. */
+    public void copyFeelFrom(PresetStore.Item item) {
+        mode = item.mode;
+        crop = item.crop;
+        rotation = item.rotation;
+        hasRect = item.hasRect;
+        rect = item.rect.clone();
+        hasScreen = item.hasScreen;
+        screen = item.screen.clone();
+        hasSpan = item.hasSpan;
+        spanX = item.spanX;
+        spanY = item.spanY;
+        external.copyFrom(item.external);
+        internal.copyFrom(item.internal);
     }
 
     private static void readInternalMatch(JSONObject match, Profile p) {
@@ -273,8 +407,37 @@ public class Profile {
         b.append("    \"pressure\": ").append(pressureJson(internal)).append(",\n");
         b.append("    \"buttons\": ").append(buttonsJson(internal)).append(",\n");
         b.append("    \"tools\": { \"eraserWins\": ").append(internal.eraserWins).append(" }\n");
-        b.append("  }\n");
-        b.append("}\n");
+        b.append("  }");
+        PresetStore.appendConfig(b);
+        b.append("\n}\n");
+        return b.toString();
+    }
+
+    static String presetBody(PresetStore.Item item) {
+        StringBuilder b = new StringBuilder();
+        b.append("{ \"mapping\": { \"mode\": \"").append(item.mode).append("\", \"crop\": \"")
+                .append(item.crop).append("\", \"rotation\": ").append(item.rotation);
+        if (item.hasRect) {
+            b.append(", \"rect\": [").append(item.rect[0]).append(", ").append(item.rect[1]).append(", ")
+                    .append(item.rect[2]).append(", ").append(item.rect[3]).append("]");
+        }
+        if (item.hasScreen) {
+            b.append(", \"screen\": [");
+            for (int i = 0; i < 4; i++) {
+                if (i > 0) b.append(", ");
+                b.append(String.format(Locale.US, "%.4f", item.screen[i]));
+            }
+            b.append("]");
+        }
+        if (item.hasSpan) {
+            b.append(", \"span\": [").append(item.spanX).append(", ").append(item.spanY).append("]");
+        }
+        b.append(" }, \"pressure\": ").append(pressureJson(item.external));
+        b.append(", \"buttons\": ").append(buttonsJson(item.external));
+        b.append(", \"tools\": { \"eraserWins\": ").append(item.external.eraserWins).append(" }");
+        b.append(", \"internal\": { \"pressure\": ").append(pressureJson(item.internal));
+        b.append(", \"buttons\": ").append(buttonsJson(item.internal));
+        b.append(", \"tools\": { \"eraserWins\": ").append(item.internal.eraserWins).append(" } } }");
         return b.toString();
     }
 
@@ -312,7 +475,7 @@ public class Profile {
         return true;
     }
 
-    private static String jsonString(String s) {
+    static String jsonString(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"");
     }

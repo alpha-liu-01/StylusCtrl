@@ -113,6 +113,73 @@ enum {
     RUBBER_STYLUS2 = 2
 };
 
+#define MAX_NAMED 8
+#define MAX_DEV_RULES 4
+#define MAX_APP_RULES 8
+
+/* One stored feel. Mapping applies to a pointer tablet. in_* is the direct pen. */
+struct feel_slot {
+    char id[32];
+    int mode;
+    int crop;
+    int has_rect;
+    int rect[4];
+    int has_screen;
+    double screen[4];
+    int rotation;
+    double curve[8];
+    int curve_n;
+    double deadzone;
+    double ceiling;
+    int stylus_action;
+    int rubber_action;
+    int eraser_wins;
+    int stylus_keys[8];
+    int stylus_nkeys;
+    int rubber_keys[8];
+    int rubber_nkeys;
+    int in_ready;
+    double in_curve[8];
+    int in_curve_n;
+    double in_deadzone;
+    double in_ceiling;
+    int in_stylus_action;
+    int in_rubber_action;
+    int in_eraser_wins;
+    int in_stylus_keys[8];
+    int in_stylus_nkeys;
+    int in_rubber_keys[8];
+    int in_rubber_nkeys;
+};
+
+struct app_rule {
+    char pkg[96];
+    char preset[32];
+};
+
+/* id "internal" is the built-in pen. Any other id is an external tablet. */
+struct dev_rule {
+    char id[32];
+    int internal;
+    int saw_vendor;
+    int saw_product;
+    unsigned vendor;
+    unsigned product;
+    char name[80];
+    char prefix[80];
+    int saw_bus;
+    unsigned bus;
+    int saw_direct;
+    int direct;
+    int saw_pen;
+    int pen;
+    int multitouch_set;
+    int multitouch;
+    char baseline[32];
+    struct app_rule apps[MAX_APP_RULES];
+    int napps;
+};
+
 struct profile {
     int mode;
     int crop;
@@ -175,6 +242,10 @@ struct profile {
     /* Set while parsing display.width or display.height. Absent keys keep the
        size already stored on this profile. */
     int saw_display;
+    int nfeels;
+    struct feel_slot feels[MAX_NAMED];
+    int ndevs;
+    struct dev_rule devs[MAX_DEV_RULES];
 };
 
 static unsigned axis_bit(int code) {
@@ -676,6 +747,152 @@ static void view_for_pen(const struct profile *src, int direct, struct profile *
     dst->rubber_nkeys = src->in_rubber_nkeys;
 }
 
+static void slot_from_profile(struct feel_slot *s, const struct profile *p) {
+    s->mode = p->mode;
+    s->crop = p->crop;
+    s->has_rect = p->has_rect;
+    memcpy(s->rect, p->rect, sizeof s->rect);
+    s->has_screen = p->has_screen;
+    memcpy(s->screen, p->screen, sizeof s->screen);
+    s->rotation = p->rotation;
+    memcpy(s->curve, p->curve, sizeof s->curve);
+    s->curve_n = p->curve_n;
+    s->deadzone = p->deadzone;
+    s->ceiling = p->ceiling;
+    s->stylus_action = p->stylus_action;
+    s->rubber_action = p->rubber_action;
+    s->eraser_wins = p->eraser_wins;
+    memcpy(s->stylus_keys, p->stylus_keys, sizeof s->stylus_keys);
+    s->stylus_nkeys = p->stylus_nkeys;
+    memcpy(s->rubber_keys, p->rubber_keys, sizeof s->rubber_keys);
+    s->rubber_nkeys = p->rubber_nkeys;
+    s->in_ready = p->in_ready;
+    memcpy(s->in_curve, p->in_curve, sizeof s->in_curve);
+    s->in_curve_n = p->in_curve_n;
+    s->in_deadzone = p->in_deadzone;
+    s->in_ceiling = p->in_ceiling;
+    s->in_stylus_action = p->in_stylus_action;
+    s->in_rubber_action = p->in_rubber_action;
+    s->in_eraser_wins = p->in_eraser_wins;
+    memcpy(s->in_stylus_keys, p->in_stylus_keys, sizeof s->in_stylus_keys);
+    s->in_stylus_nkeys = p->in_stylus_nkeys;
+    memcpy(s->in_rubber_keys, p->in_rubber_keys, sizeof s->in_rubber_keys);
+    s->in_rubber_nkeys = p->in_rubber_nkeys;
+}
+
+static void profile_from_slot(struct profile *p, const struct feel_slot *s) {
+    p->mode = s->mode;
+    p->crop = s->crop;
+    p->has_rect = s->has_rect;
+    memcpy(p->rect, s->rect, sizeof p->rect);
+    p->has_screen = s->has_screen;
+    memcpy(p->screen, s->screen, sizeof p->screen);
+    p->rotation = s->rotation;
+    memcpy(p->curve, s->curve, sizeof p->curve);
+    p->curve_n = s->curve_n;
+    p->deadzone = s->deadzone;
+    p->ceiling = s->ceiling;
+    p->stylus_action = s->stylus_action;
+    p->rubber_action = s->rubber_action;
+    p->eraser_wins = s->eraser_wins;
+    memcpy(p->stylus_keys, s->stylus_keys, sizeof p->stylus_keys);
+    p->stylus_nkeys = s->stylus_nkeys;
+    memcpy(p->rubber_keys, s->rubber_keys, sizeof p->rubber_keys);
+    p->rubber_nkeys = s->rubber_nkeys;
+    p->in_ready = s->in_ready;
+    memcpy(p->in_curve, s->in_curve, sizeof p->in_curve);
+    p->in_curve_n = s->in_curve_n;
+    p->in_deadzone = s->in_deadzone;
+    p->in_ceiling = s->in_ceiling;
+    p->in_stylus_action = s->in_stylus_action;
+    p->in_rubber_action = s->in_rubber_action;
+    p->in_eraser_wins = s->in_eraser_wins;
+    memcpy(p->in_stylus_keys, s->in_stylus_keys, sizeof p->in_stylus_keys);
+    p->in_stylus_nkeys = s->in_stylus_nkeys;
+    memcpy(p->in_rubber_keys, s->in_rubber_keys, sizeof p->in_rubber_keys);
+    p->in_rubber_nkeys = s->in_rubber_nkeys;
+}
+
+static int device_external_match(const struct dev_rule *d, const char *name, unsigned vendor, unsigned product) {
+    if (d->internal) return 0;
+    if (!d->saw_vendor && !d->saw_product && !d->name[0]) return 0;
+    if (d->saw_vendor && vendor != d->vendor) return 0;
+    if (d->saw_product && product != d->product) return 0;
+    if (d->name[0] && strcmp(name ? name : "", d->name)) return 0;
+    return 1;
+}
+
+static int device_internal_match(const struct dev_rule *d, const char *name, int direct, int pen_tool, int multitouch,
+                                 unsigned bus, unsigned vendor, unsigned product) {
+    if (!d->internal || !direct) return 0;
+    int any = d->saw_vendor || d->saw_product || d->name[0] || d->prefix[0] || d->saw_bus || d->saw_direct || d->saw_pen ||
+              d->multitouch_set;
+    if (!any) return 1;
+    if (d->multitouch_set && multitouch != d->multitouch) return 0;
+    if (d->name[0] && strcmp(name ? name : "", d->name)) return 0;
+    if (d->prefix[0] && strncmp(name ? name : "", d->prefix, strlen(d->prefix))) return 0;
+    if (d->saw_vendor && vendor != d->vendor) return 0;
+    if (d->saw_product && product != d->product) return 0;
+    if (d->saw_bus && bus != d->bus) return 0;
+    if (d->saw_direct && direct != d->direct) return 0;
+    if (d->saw_pen && pen_tool != d->pen) return 0;
+    return 1;
+}
+
+static const struct dev_rule *match_device(const struct profile *p, int direct, const char *name, unsigned vendor,
+                                           unsigned product, unsigned bus, int pen_tool, int multitouch) {
+    for (int i = 0; i < p->ndevs; i++) {
+        const struct dev_rule *d = &p->devs[i];
+        if (d->internal) {
+            if (device_internal_match(d, name, direct, pen_tool, multitouch, bus, vendor, product)) return d;
+        } else if (device_external_match(d, name, vendor, product)) return d;
+    }
+    return NULL;
+}
+
+/* pkg_fresh is 0 when the foreground file is missing or older than a few seconds.
+   The device baseline is used then, and also when the package has no override. */
+static void select_view(const struct profile *src, int direct, const char *name, unsigned vendor, unsigned product,
+                        unsigned bus, int pen_tool, int multitouch, const char *pkg, int pkg_fresh, struct profile *dst) {
+    const struct profile *base = src;
+    struct profile merged;
+    if (src->ndevs > 0) {
+        const struct dev_rule *rule = match_device(src, direct, name, vendor, product, bus, pen_tool, multitouch);
+        const char *use = rule ? rule->baseline : NULL;
+        if (rule && pkg_fresh && pkg && pkg[0]) {
+            for (int i = 0; i < rule->napps; i++) {
+                if (!strcmp(rule->apps[i].pkg, pkg)) use = rule->apps[i].preset;
+            }
+        }
+        if (use && use[0]) {
+            const struct feel_slot *slot = NULL;
+            for (int i = 0; i < src->nfeels; i++) {
+                if (!strcmp(src->feels[i].id, use)) slot = &src->feels[i];
+            }
+            if (slot) {
+                merged = *src;
+                profile_from_slot(&merged, slot);
+                base = &merged;
+            }
+        }
+    }
+    view_for_pen(base, direct, dst);
+}
+
+static int external_allowed(const struct profile *p, unsigned vendor, unsigned product, const char *name) {
+    if (!p) return 1;
+    if (p->ndevs > 0) {
+        for (int i = 0; i < p->ndevs; i++) {
+            if (device_external_match(&p->devs[i], name, vendor, product)) return 1;
+        }
+        return 0;
+    }
+    if ((p->saw_vendor && vendor != p->vendor) || (p->saw_product && product != p->product) ||
+        (p->match_name[0] && (!name || strcmp(name, p->match_name))))
+        return 0;
+    return 1;
+}
+
 static int apply_string(const char *path, const char *s, struct profile *prof) {
     const char *local;
     int inn = feel_path(path, &local);
@@ -923,8 +1140,219 @@ static int parse_object(const char **pp, const char *path, struct profile *prof)
     }
 }
 
+static int parse_dev_match(const char **pp, struct dev_rule *d) {
+    const char *p = skip_ws(*pp);
+    if (*p != '{') return -1;
+    p++;
+    p = skip_ws(p);
+    if (*p == '}') {
+        *pp = p + 1;
+        return 0;
+    }
+    while (1) {
+        char key[32];
+        p = skip_ws(p);
+        if (scan_string(&p, key, sizeof key) < 0) return -1;
+        p = skip_ws(p);
+        if (*p != ':') return -1;
+        p++;
+        p = skip_ws(p);
+        if (*p == '"') {
+            char text[80];
+            if (scan_string(&p, text, sizeof text) < 0) return -1;
+            if (!strcmp(key, "vendor")) {
+                if (parse_hex_id(text, &d->vendor) < 0) return -1;
+                d->saw_vendor = 1;
+            } else if (!strcmp(key, "product")) {
+                if (parse_hex_id(text, &d->product) < 0) return -1;
+                d->saw_product = 1;
+            } else if (!strcmp(key, "name")) snprintf(d->name, sizeof d->name, "%s", text);
+            else if (!strcmp(key, "namePrefix")) snprintf(d->prefix, sizeof d->prefix, "%s", text);
+            else if (!strcmp(key, "bus")) {
+                if (parse_bus(text, &d->bus) < 0) return -1;
+                d->saw_bus = 1;
+            }
+        } else if (!strncmp(p, "true", 4) || !strncmp(p, "false", 5)) {
+            int on = *p == 't';
+            p += on ? 4 : 5;
+            if (!strcmp(key, "direct")) {
+                d->saw_direct = 1;
+                d->direct = on;
+            } else if (!strcmp(key, "pen")) {
+                d->saw_pen = 1;
+                d->pen = on;
+            } else if (!strcmp(key, "multitouch")) {
+                d->multitouch_set = 1;
+                d->multitouch = on;
+            }
+        } else if (skip_value(&p, 0) < 0) return -1;
+        p = skip_ws(p);
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        if (*p == '}') {
+            *pp = p + 1;
+            return 0;
+        }
+        return -1;
+    }
+}
+
+static int parse_dev_apps(const char **pp, struct dev_rule *d) {
+    const char *p = skip_ws(*pp);
+    if (*p != '{') return -1;
+    p++;
+    p = skip_ws(p);
+    if (*p == '}') {
+        *pp = p + 1;
+        return 0;
+    }
+    while (1) {
+        char pkg[96];
+        char preset[32];
+        p = skip_ws(p);
+        if (scan_string(&p, pkg, sizeof pkg) < 0) return -1;
+        p = skip_ws(p);
+        if (*p != ':') return -1;
+        p++;
+        p = skip_ws(p);
+        if (scan_string(&p, preset, sizeof preset) < 0) return -1;
+        if (d->napps < MAX_APP_RULES && pkg[0] && preset[0]) {
+            snprintf(d->apps[d->napps].pkg, sizeof d->apps[d->napps].pkg, "%s", pkg);
+            snprintf(d->apps[d->napps].preset, sizeof d->apps[d->napps].preset, "%s", preset);
+            d->napps++;
+        }
+        p = skip_ws(p);
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        if (*p == '}') {
+            *pp = p + 1;
+            return 0;
+        }
+        return -1;
+    }
+}
+
+static int parse_one_device(const char **pp, struct dev_rule *d) {
+    const char *p = skip_ws(*pp);
+    if (*p != '{') return -1;
+    p++;
+    p = skip_ws(p);
+    if (*p == '}') {
+        *pp = p + 1;
+        return 0;
+    }
+    while (1) {
+        char key[32];
+        p = skip_ws(p);
+        if (scan_string(&p, key, sizeof key) < 0) return -1;
+        p = skip_ws(p);
+        if (*p != ':') return -1;
+        p++;
+        p = skip_ws(p);
+        if (!strcmp(key, "id") && *p == '"') {
+            if (scan_string(&p, d->id, sizeof d->id) < 0) return -1;
+            d->internal = strcmp(d->id, "internal") == 0;
+        } else if (!strcmp(key, "baseline") && *p == '"') {
+            if (scan_string(&p, d->baseline, sizeof d->baseline) < 0) return -1;
+        } else if (!strcmp(key, "match") && *p == '{') {
+            if (parse_dev_match(&p, d) < 0) return -1;
+        } else if (!strcmp(key, "apps") && *p == '{') {
+            if (parse_dev_apps(&p, d) < 0) return -1;
+        } else if (skip_value(&p, 0) < 0) return -1;
+        p = skip_ws(p);
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        if (*p == '}') {
+            *pp = p + 1;
+            return 0;
+        }
+        return -1;
+    }
+}
+
+static int parse_preset_map(const char **pp, struct profile *prof) {
+    const char *p = skip_ws(*pp);
+    if (*p != '{') return -1;
+    p++;
+    p = skip_ws(p);
+    if (*p == '}') {
+        *pp = p + 1;
+        return 0;
+    }
+    while (1) {
+        char id[32];
+        p = skip_ws(p);
+        if (scan_string(&p, id, sizeof id) < 0) return -1;
+        p = skip_ws(p);
+        if (*p != ':') return -1;
+        p++;
+        p = skip_ws(p);
+        if (*p == '{') {
+            struct profile tmp;
+            profile_reset(&tmp);
+            if (parse_object(&p, "", &tmp) < 0) return -1;
+            if (prof->nfeels < MAX_NAMED && id[0]) {
+                struct feel_slot *s = &prof->feels[prof->nfeels++];
+                memset(s, 0, sizeof *s);
+                snprintf(s->id, sizeof s->id, "%s", id);
+                slot_from_profile(s, &tmp);
+            }
+        } else if (skip_value(&p, 0) < 0) return -1;
+        p = skip_ws(p);
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        if (*p == '}') {
+            *pp = p + 1;
+            return 0;
+        }
+        return -1;
+    }
+}
+
+static int parse_device_list(const char **pp, struct profile *prof) {
+    const char *p = skip_ws(*pp);
+    if (*p != '[') return -1;
+    p++;
+    p = skip_ws(p);
+    if (*p == ']') {
+        *pp = p + 1;
+        return 0;
+    }
+    while (1) {
+        p = skip_ws(p);
+        if (*p == '{') {
+            if (prof->ndevs < MAX_DEV_RULES) {
+                struct dev_rule *d = &prof->devs[prof->ndevs];
+                memset(d, 0, sizeof *d);
+                if (parse_one_device(&p, d) < 0) return -1;
+                if (d->id[0]) prof->ndevs++;
+            } else if (skip_value(&p, 0) < 0) return -1;
+        } else if (skip_value(&p, 0) < 0) return -1;
+        p = skip_ws(p);
+        if (*p == ',') {
+            p++;
+            continue;
+        }
+        if (*p == ']') {
+            *pp = p + 1;
+            return 0;
+        }
+        return -1;
+    }
+}
+
 static int parse_value(const char **pp, const char *path, struct profile *prof) {
     const char *p = skip_ws(*pp);
+    if (!strcmp(path, "presets") && *p == '{') return parse_preset_map(pp, prof);
+    if (!strcmp(path, "devices") && *p == '[') return parse_device_list(pp, prof);
     if (*p == '{') return parse_object(pp, path, prof);
     if (*p == '[') return parse_array(pp, path, prof);
     if (*p == '"') {
@@ -1889,6 +2317,42 @@ static void test_device_match(void) {
     expect("saved name", strcmp(p.match_name, "Pen Tablet") == 0, 1);
 }
 
+static void test_presets(void) {
+    struct profile p;
+    struct profile view;
+    memset(&p, 0, sizeof p);
+    profile_reset(&p);
+    const char *text =
+        "{\"pressure\":{\"ceiling\":0.1},"
+        "\"presets\":{"
+        "\"writing\":{\"pressure\":{\"ceiling\":0.2},\"internal\":{\"pressure\":{\"ceiling\":0.3}}},"
+        "\"sketch\":{\"pressure\":{\"ceiling\":0.9},\"internal\":{\"pressure\":{\"ceiling\":0.8}}}"
+        "},"
+        "\"devices\":["
+        "{\"id\":\"internal\",\"baseline\":\"writing\",\"apps\":{\"com.foo\":\"sketch\"}},"
+        "{\"id\":\"wacom-one\",\"match\":{\"vendor\":\"0531\",\"product\":\"0104\"},\"baseline\":\"writing\","
+        "\"apps\":{\"com.foo\":\"sketch\"}}"
+        "]}";
+    expect("preset parse", parse_config(text, &p), 0);
+    expect("two presets", p.nfeels, 2);
+    expect("two devices", p.ndevs, 2);
+    expect("top still there", p.ceiling == 0.1, 1);
+    select_view(&p, 0, "Wacom", 0x0531, 0x0104, BUS_USB, 1, 0, "com.foo", 1, &view);
+    expect("override ceiling", view.ceiling == 0.9, 1);
+    select_view(&p, 0, "Wacom", 0x0531, 0x0104, BUS_USB, 1, 0, "com.other", 1, &view);
+    expect("baseline ceiling", view.ceiling == 0.2, 1);
+    select_view(&p, 0, "Wacom", 0x0531, 0x0104, BUS_USB, 1, 0, "com.foo", 0, &view);
+    expect("stale uses baseline", view.ceiling == 0.2, 1);
+    select_view(&p, 1, "sec_e-pen", 0, 0, 0, 1, 0, "com.foo", 1, &view);
+    expect("internal override", view.ceiling == 0.8, 1);
+    expect("wacom allowed", external_allowed(&p, 0x0531, 0x0104, "Wacom"), 1);
+    expect("other vendor blocked", external_allowed(&p, 0x056a, 0x0300, "Other"), 0);
+    struct profile plain;
+    memset(&plain, 0, sizeof plain);
+    profile_reset(&plain);
+    expect("no devices allows", external_allowed(&plain, 0x056a, 0x0300, "Other"), 1);
+}
+
 static void test_vname(void) {
     char name[80];
     format_vname(name, 80, 0, 15200, 0, 9500, "Wacom Co.,Ltd. Wacom One pen tablet small");
@@ -1941,6 +2405,7 @@ int main(void) {
     test_relay_dock();
     test_display_config();
     test_device_match();
+    test_presets();
     test_vname();
     test_builtin_pen();
     if (failures) {
@@ -1959,6 +2424,9 @@ static int verbose;
 static struct profile cfg;
 static int cfg_loaded;
 static char config_path[256];
+static char fg_pkg[96];
+static int fg_fresh;
+static char fg_logged[96];
 static time_t config_sec;
 static long config_nsec;
 static long config_check_ms;
@@ -2016,10 +2484,25 @@ struct pen {
     int seen;
     int idc_on;
     int direct;
+    int pen_tool;
+    int multitouch;
+    int latch_valid;
+    double latch_curve[8];
+    int latch_curve_n;
+    double latch_deadzone;
+    double latch_ceiling;
+    int latch_stylus_action;
+    int latch_rubber_action;
+    int latch_eraser_wins;
+    int latch_stylus_keys[8];
+    int latch_stylus_nkeys;
+    int latch_rubber_keys[8];
+    int latch_rubber_nkeys;
     int xmin, xmax, ymin, ymax, pmin, pmax;
     int last_x, last_y, last_pressure;
     int last_tilt_x, last_tilt_y;
     char path[64];
+    char source[80];
     char vname[UINPUT_MAX_NAME_SIZE];
     char idc_path[160];
     struct input_id id;
@@ -2317,6 +2800,7 @@ static void log_profile(void) {
             stylus_word(cfg.stylus_action),
             rubber_word(cfg.rubber_action), cfg.deadzone, cfg.ceiling > cfg.deadzone ? cfg.ceiling : 1.0);
     if (cfg.has_rect) log_msg("tablet rect %d,%d-%d,%d", cfg.rect[0], cfg.rect[1], cfg.rect[2], cfg.rect[3]);
+    if (cfg.nfeels || cfg.ndevs) log_msg("presets %d, devices %d", cfg.nfeels, cfg.ndevs);
     if (cfg.has_screen)
         log_msg("screen rect %.3f,%.3f-%.3f,%.3f", cfg.screen[0], cfg.screen[1], cfg.screen[2], cfg.screen[3]);
     if (cfg.rotation) log_msg("tablet rotation %d", cfg.rotation * 90);
@@ -2615,50 +3099,49 @@ fail:
 static int kbd_codes[16];
 static int kbd_ncodes;
 
+static void add_keys(int *out, int *n, int cap, const int *keys, int nkeys) {
+    for (int k = 0; k < nkeys; k++) {
+        int seen = 0;
+        for (int j = 0; j < *n; j++) {
+            if (out[j] == keys[k]) seen = 1;
+        }
+        if (seen) continue;
+        if (*n >= cap) return;
+        out[(*n)++] = keys[k];
+    }
+}
+
 static int wants_keyboard(void) {
     if (!cfg_loaded) return 0;
     if (cfg.stylus_action == STYLUS_SHORTCUT || cfg.rubber_action == RUBBER_SHORTCUT) return 1;
     if (cfg.internal_on && cfg.in_ready &&
         (cfg.in_stylus_action == STYLUS_SHORTCUT || cfg.in_rubber_action == RUBBER_SHORTCUT))
         return 1;
+    for (int i = 0; i < cfg.nfeels; i++) {
+        const struct feel_slot *s = &cfg.feels[i];
+        if (s->stylus_action == STYLUS_SHORTCUT || s->rubber_action == RUBBER_SHORTCUT) return 1;
+        if (cfg.internal_on && s->in_ready &&
+            (s->in_stylus_action == STYLUS_SHORTCUT || s->in_rubber_action == RUBBER_SHORTCUT))
+            return 1;
+    }
     return 0;
 }
 
 static int collect_bound_keys(int *out, int cap) {
     int n = 0;
-    const int *lists[4];
-    int counts[4];
-    int nlists = 0;
-    if (cfg.stylus_action == STYLUS_SHORTCUT && cfg.stylus_nkeys > 0) {
-        lists[nlists] = cfg.stylus_keys;
-        counts[nlists] = cfg.stylus_nkeys;
-        nlists++;
+    if (cfg.stylus_action == STYLUS_SHORTCUT) add_keys(out, &n, cap, cfg.stylus_keys, cfg.stylus_nkeys);
+    if (cfg.rubber_action == RUBBER_SHORTCUT) add_keys(out, &n, cap, cfg.rubber_keys, cfg.rubber_nkeys);
+    if (cfg.internal_on && cfg.in_ready) {
+        if (cfg.in_stylus_action == STYLUS_SHORTCUT) add_keys(out, &n, cap, cfg.in_stylus_keys, cfg.in_stylus_nkeys);
+        if (cfg.in_rubber_action == RUBBER_SHORTCUT) add_keys(out, &n, cap, cfg.in_rubber_keys, cfg.in_rubber_nkeys);
     }
-    if (cfg.rubber_action == RUBBER_SHORTCUT && cfg.rubber_nkeys > 0) {
-        lists[nlists] = cfg.rubber_keys;
-        counts[nlists] = cfg.rubber_nkeys;
-        nlists++;
-    }
-    if (cfg.internal_on && cfg.in_ready && cfg.in_stylus_action == STYLUS_SHORTCUT && cfg.in_stylus_nkeys > 0) {
-        lists[nlists] = cfg.in_stylus_keys;
-        counts[nlists] = cfg.in_stylus_nkeys;
-        nlists++;
-    }
-    if (cfg.internal_on && cfg.in_ready && cfg.in_rubber_action == RUBBER_SHORTCUT && cfg.in_rubber_nkeys > 0) {
-        lists[nlists] = cfg.in_rubber_keys;
-        counts[nlists] = cfg.in_rubber_nkeys;
-        nlists++;
-    }
-    for (int i = 0; i < nlists; i++) {
-        for (int k = 0; k < counts[i]; k++) {
-            int code = lists[i][k];
-            int seen = 0;
-            for (int j = 0; j < n; j++) {
-                if (out[j] == code) seen = 1;
-            }
-            if (seen) continue;
-            if (n >= cap) return n;
-            out[n++] = code;
+    for (int i = 0; i < cfg.nfeels; i++) {
+        const struct feel_slot *s = &cfg.feels[i];
+        if (s->stylus_action == STYLUS_SHORTCUT) add_keys(out, &n, cap, s->stylus_keys, s->stylus_nkeys);
+        if (s->rubber_action == RUBBER_SHORTCUT) add_keys(out, &n, cap, s->rubber_keys, s->rubber_nkeys);
+        if (cfg.internal_on && s->in_ready) {
+            if (s->in_stylus_action == STYLUS_SHORTCUT) add_keys(out, &n, cap, s->in_stylus_keys, s->in_stylus_nkeys);
+            if (s->in_rubber_action == RUBBER_SHORTCUT) add_keys(out, &n, cap, s->in_rubber_keys, s->in_rubber_nkeys);
         }
     }
     return n;
@@ -2709,6 +3192,38 @@ static void stamp_ev(struct input_event *ev, const struct timespec *ts, int type
     ev->value = value;
 }
 
+static void fill_view(struct pen *pen, struct profile *view) {
+    select_view(&cfg, pen->direct, pen->source, pen->id.vendor, pen->id.product, pen->id.bustype, pen->pen_tool,
+                pen->multitouch, fg_pkg, fg_fresh, view);
+    int held = pen->tool.phys_touch || pen->tool.phys_stylus || pen->tool.phys_rubber;
+    if (held && pen->latch_valid) {
+        memcpy(view->curve, pen->latch_curve, sizeof view->curve);
+        view->curve_n = pen->latch_curve_n;
+        view->deadzone = pen->latch_deadzone;
+        view->ceiling = pen->latch_ceiling;
+        view->stylus_action = pen->latch_stylus_action;
+        view->rubber_action = pen->latch_rubber_action;
+        view->eraser_wins = pen->latch_eraser_wins;
+        memcpy(view->stylus_keys, pen->latch_stylus_keys, sizeof view->stylus_keys);
+        view->stylus_nkeys = pen->latch_stylus_nkeys;
+        memcpy(view->rubber_keys, pen->latch_rubber_keys, sizeof view->rubber_keys);
+        view->rubber_nkeys = pen->latch_rubber_nkeys;
+        return;
+    }
+    pen->latch_valid = 1;
+    memcpy(pen->latch_curve, view->curve, sizeof pen->latch_curve);
+    pen->latch_curve_n = view->curve_n;
+    pen->latch_deadzone = view->deadzone;
+    pen->latch_ceiling = view->ceiling;
+    pen->latch_stylus_action = view->stylus_action;
+    pen->latch_rubber_action = view->rubber_action;
+    pen->latch_eraser_wins = view->eraser_wins;
+    memcpy(pen->latch_stylus_keys, view->stylus_keys, sizeof pen->latch_stylus_keys);
+    pen->latch_stylus_nkeys = view->stylus_nkeys;
+    memcpy(pen->latch_rubber_keys, view->rubber_keys, sizeof pen->latch_rubber_keys);
+    pen->latch_rubber_nkeys = view->rubber_nkeys;
+}
+
 static void resync_pen(struct pen *pen) {
     if (!pen->seen || pen->ufd < 0) return;
     int mx = pen->last_x;
@@ -2717,7 +3232,7 @@ static void resync_pen(struct pen *pen) {
     struct profile view;
     int have_view = 0;
     if (cfg_loaded) {
-        view_for_pen(&cfg, pen->direct, &view);
+        fill_view(pen, &view);
         have_view = 1;
         if (!pen->direct)
             map_point(&view, pen->xmin, pen->xmax, pen->ymin, pen->ymax, pen->last_x, pen->last_y, &mx, &my);
@@ -2776,7 +3291,7 @@ static void forward_packet(struct pen *pen) {
     struct profile view;
     const struct profile *prof = NULL;
     if (cfg_loaded) {
-        view_for_pen(&cfg, pen->direct, &view);
+        fill_view(pen, &view);
         prof = &view;
     }
     int n = emit_report(&pen->tool, pen->pkt, in_n, out, MAX_PACKET + 4, prof);
@@ -3049,9 +3564,7 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
         axes[i].present = 1;
         mask |= axis_bit(codes[i]);
     }
-    if (!builtin && cfg_loaded &&
-        ((cfg.saw_vendor && id.vendor != cfg.vendor) || (cfg.saw_product && id.product != cfg.product) ||
-         (cfg.match_name[0] && strcmp(source, cfg.match_name)))) {
+    if (!builtin && cfg_loaded && !external_allowed(&cfg, id.vendor, id.product, source)) {
         close(fd);
         return;
     }
@@ -3066,6 +3579,9 @@ static void try_add(struct pen *pens, int *npens, const char *path) {
     pen->hid_fd = -1;
     pen->ufd = -1;
     pen->direct = builtin;
+    pen->pen_tool = pen_tool;
+    pen->multitouch = multitouch;
+    snprintf(pen->source, sizeof pen->source, "%s", source);
     unsigned long swbits[2];
     memset(swbits, 0, sizeof swbits);
     ioctl(fd, EVIOCGBIT(EV_SW, sizeof swbits), swbits);
@@ -3158,6 +3674,43 @@ static void reload_config(struct pen *pens, int *npens) {
     resync_shortcuts(pens, *npens);
 }
 
+static int foreground_path(char *out, int cap) {
+    const char *slash = strrchr(config_path, '/');
+    if (!slash) return -1;
+    int dirlen = (int)(slash - config_path);
+    int wrote = snprintf(out, (size_t)cap, "%.*s/foreground", dirlen, config_path);
+    if (wrote < 0 || wrote >= cap) return -1;
+    return 0;
+}
+
+/* The settings app rewrites this about every two seconds. Older than five
+   seconds means the watcher stopped, and every device stays on its baseline. */
+static void poll_foreground(void) {
+    char path[300];
+    char buf[96];
+    struct stat st;
+    struct timespec now;
+    fg_fresh = 0;
+    fg_pkg[0] = 0;
+    if (foreground_path(path, (int)sizeof path) < 0) return;
+    if (stat(path, &st) != 0) return;
+    clock_gettime(CLOCK_REALTIME, &now);
+    long long age = (now.tv_sec - st.st_mtim.tv_sec) * 1000LL + (now.tv_nsec - st.st_mtim.tv_nsec) / 1000000LL;
+    if (age > 5000) return;
+    if (read_text(path, buf, (int)sizeof buf) < 0) return;
+    int n = 0;
+    for (int i = 0; buf[i] && n < (int)sizeof fg_pkg - 1; i++) {
+        if (buf[i] == '\n' || buf[i] == '\r' || buf[i] == ' ' || buf[i] == '\t') continue;
+        fg_pkg[n++] = buf[i];
+    }
+    fg_pkg[n] = 0;
+    fg_fresh = 1;
+    if (strcmp(fg_logged, fg_pkg)) {
+        snprintf(fg_logged, sizeof fg_logged, "%s", fg_pkg);
+        log_msg("foreground %s", fg_pkg[0] ? fg_pkg : "baseline");
+    }
+}
+
 static int open_input_watch(void) {
     int fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (fd < 0) {
@@ -3192,6 +3745,7 @@ static int run_daemon(void) {
     profile_reset(&cfg);
     load_config();
     remember_config_time();
+    poll_foreground();
     sync_keyboard();
 
     struct pen pens[MAX_PENS];
@@ -3275,6 +3829,7 @@ static int run_daemon(void) {
         }
         if (now_ms() - config_check_ms >= 1000) {
             config_check_ms = now_ms();
+            poll_foreground();
             if (config_time_changed()) {
                 log_msg("config changed");
                 reload_config(pens, &npens);

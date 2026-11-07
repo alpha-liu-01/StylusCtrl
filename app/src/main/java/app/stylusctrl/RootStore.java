@@ -161,9 +161,54 @@ public final class RootStore {
         }
     }
 
+    public static boolean rooted() {
+        return isRoot();
+    }
+
+    /** One file next to the daemon config. Empty means the device baseline. */
+    public static void writeForeground(Context context, String pkg) {
+        String body = pkg == null || pkg.isEmpty() ? "\n" : pkg.trim() + "\n";
+        try {
+            writeLocalFile(context, "foreground", body);
+            if (isRoot()) writeAbs("/data/adb/stylusctrl/foreground", body);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static void writeAbs(String path, String text) {
+        int slash = path.lastIndexOf('/');
+        if (slash <= 0) return;
+        String b64 = Base64.encodeToString(text.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
+        Shell.cmd(
+                "mkdir -p " + path.substring(0, slash),
+                "printf '%s' '" + b64 + "' | base64 -d > " + path,
+                "chmod 644 " + path
+        ).exec();
+    }
+
+    private static void writeLocalFile(Context context, String name, String text) throws IOException {
+        File out = new File(context.getFilesDir(), name);
+        File tmp = new File(context.getFilesDir(), name + ".tmp");
+        try (FileOutputStream fos = new FileOutputStream(tmp)) {
+            fos.write(text.getBytes(StandardCharsets.UTF_8));
+            fos.getFD().sync();
+        }
+        if (out.exists() && !out.delete()) return;
+        if (!tmp.renameTo(out)) return;
+        context.getDataDir().setExecutable(true, false);
+        context.getFilesDir().setExecutable(true, false);
+        out.setReadable(true, false);
+    }
+
+    private static volatile boolean rootKnown;
+
+    /** A granted root shell stays for this process. A denial is checked again next time. */
     private static boolean isRoot() {
+        if (rootKnown) return true;
         Shell.Result id = Shell.cmd("id -u").exec();
-        return id.isSuccess() && !id.getOut().isEmpty() && "0".equals(id.getOut().get(0).trim());
+        boolean ok = id.isSuccess() && !id.getOut().isEmpty() && "0".equals(id.getOut().get(0).trim());
+        if (ok) rootKnown = true;
+        return ok;
     }
 
     private static File localConfig(Context context) {

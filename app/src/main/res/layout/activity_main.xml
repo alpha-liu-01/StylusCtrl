@@ -43,11 +43,17 @@
                     android:textAppearance="?attr/textAppearanceHeadlineSmall" />
 
                 <TextView
+                    android:id="@+id/edit_target"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+
+                <TextView
                     android:id="@+id/page_sub"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="@string/pen_external"
-                    android:textAppearance="?attr/textAppearanceBodyMedium" />
+                    android:textAppearance="?attr/textAppearanceBodySmall" />
             </LinearLayout>
 
             <com.google.android.material.button.MaterialButton
